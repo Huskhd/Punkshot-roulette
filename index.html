@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#060806">
-  <meta name="description" content="Muckshot — one gun, a handful of shells, and a table full of swamp folk. A low-poly party game for 2–4 players.">
+  <meta name="description" content="Muckshot — un arma, unos cartuchos y una mesa llena de gente del pantano. Juego de fiesta low-poly para 2–4 jugadores.">
   <title>Muckshot</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23060806'/%3E%3Crect x='6' y='2' width='4' height='9' fill='%23b3232b'/%3E%3Crect x='6' y='11' width='4' height='3' fill='%23c9a13a'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -16,11 +16,13 @@
   <canvas id="gl"></canvas>
   <div id="vignette"></div>
   <div id="scanlines"></div>
+  <div id="fx-lastlife"></div>
   <div id="fx-hurt"></div>
   <div id="fx-flash"></div>
   <div id="fx-black"></div>
 
   <!-- in-game HUD -->
+  <div id="tags"></div>
   <div id="hud" class="hidden">
     <div id="plates"></div>
     <div id="roundinfo"></div>
@@ -33,25 +35,25 @@
     <div id="ab-items"></div>
     <div id="ab-buttons"></div>
   </div>
-  <div id="modal" class="hidden"><div class="panel" id="modal-panel"></div></div>
 
   <!-- title -->
   <section id="screen-title" class="screen">
     <div class="panel title-panel">
       <h1 class="logo">MUCKSHOT</h1>
-      <p class="tagline">one gun · a few shells · no friends left</p>
-      <label class="field">Your name
-        <input id="in-name" maxlength="14" autocomplete="off" spellcheck="false" placeholder="Stranger">
+      <p class="tagline" data-i18n="tagline"></p>
+      <label class="field"><span data-i18n="yourName"></span>
+        <input id="in-name" maxlength="14" autocomplete="off" spellcheck="false" data-i18n-ph="namePh">
       </label>
       <div class="btncol">
-        <button class="big" id="btn-vs">VS COMPUTER</button>
-        <button class="big" id="btn-pass">PASS &amp; PLAY</button>
-        <button class="big" id="btn-online">PLAY ONLINE</button>
-        <button id="btn-help">HOW TO PLAY</button>
+        <button class="big" id="btn-vs" data-i18n="vs"></button>
+        <button class="big" id="btn-pass" data-i18n="pass"></button>
+        <button class="big" id="btn-online" data-i18n="online"></button>
+        <button id="btn-help" data-i18n="help"></button>
       </div>
       <div class="row small">
-        <button id="btn-sound-t" class="toggle">SOUND: ON</button>
-        <button id="btn-pixels-t" class="toggle">PIXELS: RETRO</button>
+        <button id="btn-lang-t" class="toggle" data-i18n="langBtn"></button>
+        <button id="btn-sound-t" class="toggle"></button>
+        <button id="btn-pixels-t" class="toggle"></button>
       </div>
     </div>
   </section>
@@ -59,30 +61,25 @@
   <!-- local setup (vs computer + pass & play) -->
   <section id="screen-local" class="screen hidden">
     <div class="panel">
-      <h2 id="local-title">VS COMPUTER</h2>
-      <div class="field">Players
+      <h2 id="local-title"></h2>
+      <div class="field"><span data-i18n="players"></span>
         <div class="seg" id="seg-count">
           <button data-n="2">2</button><button data-n="3">3</button><button data-n="4">4</button>
         </div>
       </div>
       <div id="seat-list"></div>
       <div class="opts">
-        <label class="field">Starting HP
+        <label class="field"><span data-i18n="startHp"></span>
           <select id="opt-hp"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option></select>
         </label>
-        <label class="field">Items
-          <select id="opt-items">
-            <option value="progressive">Progressive</option>
-            <option value="draft">Draft</option>
-            <option value="shop">Shop</option>
-            <option value="none">No items</option>
-          </select>
+        <label class="field"><span data-i18n="items"></span>
+          <select id="opt-items" class="mode-select"></select>
         </label>
       </div>
       <p class="hint" id="items-hint"></p>
       <div class="row">
-        <button id="btn-local-back">BACK</button>
-        <button class="big accent" id="btn-local-start">START</button>
+        <button id="btn-local-back" data-i18n="back"></button>
+        <button class="big accent" id="btn-local-start" data-i18n="start"></button>
       </div>
     </div>
   </section>
@@ -90,55 +87,49 @@
   <!-- online: create / join -->
   <section id="screen-online" class="screen hidden">
     <div class="panel">
-      <h2>PLAY ONLINE</h2>
-      <p class="hint">Make a room and send the code to your friends. They open this page on their phone or PC and join with it.</p>
-      <label class="field">Your name
-        <input id="in-name-online" maxlength="14" autocomplete="off" spellcheck="false" placeholder="Stranger">
+      <h2 data-i18n="online"></h2>
+      <p class="hint" data-i18n="onlineHint"></p>
+      <label class="field"><span data-i18n="yourName"></span>
+        <input id="in-name-online" maxlength="14" autocomplete="off" spellcheck="false" data-i18n-ph="namePh">
       </label>
-      <button class="big accent" id="btn-create">CREATE ROOM</button>
-      <div class="or">— or —</div>
+      <button class="big accent" id="btn-create" data-i18n="createRoom"></button>
+      <div class="or" data-i18n="or"></div>
       <div class="row">
-        <input id="in-code" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false" class="code-in">
-        <button class="big" id="btn-join">JOIN</button>
+        <input id="in-code" maxlength="4" autocomplete="off" spellcheck="false" class="code-in" data-i18n-ph="codePh">
+        <button class="big" id="btn-join" data-i18n="join"></button>
       </div>
       <p class="status" id="online-status"></p>
-      <button id="btn-online-back">BACK</button>
+      <button id="btn-online-back" data-i18n="back"></button>
     </div>
   </section>
 
   <!-- lobby -->
   <section id="screen-lobby" class="screen hidden">
     <div class="panel">
-      <h2>ROOM <span id="lobby-code" class="code">----</span></h2>
+      <h2><span data-i18n="room"></span> <span id="lobby-code" class="code">----</span></h2>
       <div class="row small">
-        <button id="btn-copy-code">COPY CODE</button>
-        <button id="btn-copy-link">COPY INVITE LINK</button>
+        <button id="btn-copy-code" data-i18n="copyCode"></button>
+        <button id="btn-copy-link" data-i18n="copyLink"></button>
       </div>
       <ul id="lobby-list"></ul>
       <div id="lobby-host-ctrls">
         <div class="row">
-          <select id="lobby-bot-level">
-            <option value="easy">Bot: Easy</option><option value="hard" selected>Bot: Hard</option>
-            <option value="xhard">Bot: Xtra Hard</option><option value="pro">Bot: Pro</option>
-          </select>
-          <button id="btn-add-bot">+ ADD BOT</button>
+          <select id="lobby-bot-level"></select>
+          <button id="btn-add-bot" data-i18n="addBot"></button>
         </div>
         <div class="opts">
-          <label class="field">Starting HP
+          <label class="field"><span data-i18n="startHp"></span>
             <select id="lobby-hp"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option></select>
           </label>
-          <label class="field">Items
-            <select id="lobby-items">
-              <option value="progressive">Progressive</option><option value="draft">Draft</option>
-              <option value="shop">Shop</option><option value="none">No items</option>
-            </select>
+          <label class="field"><span data-i18n="items"></span>
+            <select id="lobby-items" class="mode-select"></select>
           </label>
         </div>
       </div>
       <p class="hint" id="lobby-info"></p>
       <div class="row">
-        <button id="btn-lobby-leave">LEAVE</button>
-        <button class="big accent" id="btn-lobby-start">START</button>
+        <button id="btn-lobby-leave" data-i18n="leave"></button>
+        <button class="big accent" id="btn-lobby-start" data-i18n="start"></button>
       </div>
     </div>
   </section>
@@ -146,21 +137,21 @@
   <!-- pass the device -->
   <section id="screen-pass" class="screen hidden opaque">
     <div class="panel center">
-      <p class="hint">Pass the device to</p>
+      <p class="hint" data-i18n="passTo"></p>
       <h1 id="pass-name" class="logo small">NAME</h1>
-      <button class="big accent" id="btn-pass-ready">I'M READY</button>
+      <button class="big accent" id="btn-pass-ready" data-i18n="ready"></button>
     </div>
   </section>
 
   <!-- scoreboard -->
   <section id="screen-score" class="screen hidden">
     <div class="panel">
-      <h2 id="score-title">LAST ONE STANDING</h2>
+      <h2 id="score-title"></h2>
       <table id="score-table"></table>
       <p class="hint" id="score-hint"></p>
       <div class="row">
-        <button id="btn-score-menu">MAIN MENU</button>
-        <button class="big accent" id="btn-rematch">REMATCH</button>
+        <button id="btn-score-menu" data-i18n="mainMenu"></button>
+        <button class="big accent" id="btn-rematch" data-i18n="rematch"></button>
       </div>
     </div>
   </section>
@@ -168,14 +159,15 @@
   <!-- in-game menu -->
   <section id="screen-menu" class="screen hidden">
     <div class="panel">
-      <h2>PAUSED</h2>
+      <h2 data-i18n="paused"></h2>
       <div class="btncol">
-        <button class="big" id="btn-resume">RESUME</button>
-        <button id="btn-sound-m" class="toggle">SOUND: ON</button>
-        <button id="btn-speed" class="toggle">SPEED: 1x</button>
-        <button id="btn-pixels-m" class="toggle">PIXELS: RETRO</button>
-        <button id="btn-help-m">HOW TO PLAY</button>
-        <button id="btn-quit">QUIT TO TITLE</button>
+        <button class="big" id="btn-resume" data-i18n="resume"></button>
+        <button id="btn-lang-m" class="toggle" data-i18n="langBtn"></button>
+        <button id="btn-sound-m" class="toggle"></button>
+        <button id="btn-speed" class="toggle"></button>
+        <button id="btn-pixels-m" class="toggle"></button>
+        <button id="btn-help-m" data-i18n="help"></button>
+        <button id="btn-quit" data-i18n="quit"></button>
       </div>
     </div>
   </section>
@@ -183,25 +175,17 @@
   <!-- help -->
   <section id="screen-help" class="screen hidden">
     <div class="panel wide">
-      <h2>HOW TO PLAY</h2>
+      <h2 data-i18n="help"></h2>
       <div class="help-body">
-        <p>Each round the gun is loaded with <b>live</b> and <b>blank</b> shells. You're told how many of each, then they go in — in an order nobody knows.</p>
-        <p>On your turn, use as many items as you like, then point the gun at <b>yourself</b> or <b>another player</b>.</p>
-        <ul>
-          <li>Live shell: whoever it's pointed at loses 1 HP.</li>
-          <li>Blank at yourself: you <b>go again</b>.</li>
-          <li>Blank at someone else: your turn ends.</li>
-        </ul>
-        <p>When the gun is empty a new round starts. Last player standing wins.</p>
-        <p><b>Items</b> — Progressive: round 1 has none, round 2 gives 2 each, round 3 gives 3… Draft: everyone picks from one shared tray. Shop: survive rounds to earn chips, then buy. You hold up to 8 items; anything that doesn't fit is lost.</p>
+        <div data-i18n-html="helpBody"></div>
         <div id="help-items"></div>
       </div>
-      <button class="big" id="btn-help-close">GOT IT</button>
+      <button class="big" id="btn-help-close" data-i18n="gotIt"></button>
     </div>
   </section>
 
   <div id="toast" class="hidden"></div>
-  <noscript><p style="color:#fff;padding:2em">Muckshot needs JavaScript.</p></noscript>
+  <noscript><p style="color:#fff;padding:2em">Muckshot necesita JavaScript.</p></noscript>
   <script src="lib/peerjs.min.js"></script>
   <script src="lib/mqtt.min.js"></script>
   <script type="module" src="js/main.js"></script>

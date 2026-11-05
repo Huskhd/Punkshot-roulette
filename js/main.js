@@ -1,12 +1,13 @@
 // Muckshot — app flow: title, setup, sessions (local, online host, online client).
 import { TableView } from './table.js';
 import { UI } from './ui.js';
-import { Game, ITEM_IDS, redactEvents } from './engine.js';
+import { Game, ITEM_IDS, ITEM_MODES, redactEvents } from './engine.js';
 import { botAction, DIFFICULTIES } from './bot.js';
 import { initAudio, sfx, setMuted, isMuted } from './audio.js';
 import { setSpeed, getSpeed, wait } from './gfx.js';
 import { HostNet, ClientNet, cleanCode } from './net.js';
-import { CHARACTERS } from './models.js';
+import { t, getLang, setLang, applyStatic, charName, allCharNames, levelName } from './i18n.js';
+import { Duo, botScore } from './minigames.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -14,21 +15,44 @@ const store = {
   set(k, v) { try { localStorage.setItem('muckshot.' + k, JSON.stringify(v)); } catch (e) { /* private mode */ } },
 };
 
+setLang(getLang());
 const ui = new UI();
 const canvas = $('gl');
 const view = new TableView(canvas, ui);
+const duo = new Duo();
+ui.view = view;
+ui.duo = duo;
 ui.thumbs = view.makeThumbs(ITEM_IDS);
-ui.buildHelp();
 view.setupDemo();
 
 const app = { session: null, wins: {}, online: null, localSetup: null };
-window.__muckshot = { app, view, ui, setSpeed, startLocal: (s) => startLocal(s) }; // handy for debugging in the console
+window.__muckshot = { app, view, ui, duo, setSpeed, startLocal: (s) => startLocal(s) }; // handy for debugging
 
-// ---------- settings ----------
-function myName() {
-  const n = ($('in-name').value || '').trim().slice(0, 14);
-  return n || 'Stranger';
+// ---------- language & settings ----------
+let localMode = 'vs';
+let seatCount = 2;
+function fillSelects() {
+  document.querySelectorAll('.mode-select').forEach((sel) => {
+    const v = sel.value;
+    sel.innerHTML = ITEM_MODES.map((m) => `<option value="${m}">${t('mode_' + m)}</option>`).join('');
+    sel.value = v || 'progressive';
+  });
+  const lv = $('lobby-bot-level');
+  const v = lv.value || 'hard';
+  lv.innerHTML = DIFFICULTIES.map((k) => `<option value="${k}">${t('bot', { l: levelName(k) })}</option>`).join('');
+  lv.value = v;
 }
+function applyLang() {
+  applyStatic();
+  fillSelects();
+  refreshToggles();
+  ui.buildHelp();
+  if (!$('screen-local').classList.contains('hidden')) { $('local-title').textContent = t(localMode === 'vs' ? 'vs' : 'pass'); renderSeats(true); itemHint(); }
+  if (app.online) renderLobby();
+  if (!app.session) view.setupDemo();
+  if (ui.lastHud) ui.hud(ui.lastHud.s, ui.lastHud.viewer);
+}
+function myName() { return ($('in-name').value || '').trim().slice(0, 14) || t('namePh'); }
 $('in-name').value = store.get('name', '');
 $('in-name-online').value = $('in-name').value;
 for (const [a, b] of [['in-name', 'in-name-online'], ['in-name-online', 'in-name']]) {
@@ -39,21 +63,23 @@ setMuted(store.get('muted', false));
 setSpeed(store.get('speed', 1));
 view.setRetro(store.get('retro', true));
 function refreshToggles() {
-  const s = isMuted() ? 'SOUND: OFF' : 'SOUND: ON';
+  const s = t(isMuted() ? 'soundOff' : 'soundOn');
   $('btn-sound-t').textContent = s;
   $('btn-sound-m').textContent = s;
-  const p = view.retro ? 'PIXELS: RETRO' : 'PIXELS: SHARP';
+  const p = t(view.retro ? 'pixRetro' : 'pixSharp');
   $('btn-pixels-t').textContent = p;
   $('btn-pixels-m').textContent = p;
-  $('btn-speed').textContent = `SPEED: ${getSpeed()}x`;
+  $('btn-speed').textContent = t('speed', { s: getSpeed() });
 }
-refreshToggles();
 const toggleSound = () => { setMuted(!isMuted()); store.set('muted', isMuted()); refreshToggles(); sfx('ui'); };
 const togglePixels = () => { view.setRetro(!view.retro); store.set('retro', view.retro); refreshToggles(); };
+const toggleLang = () => { setLang(getLang() === 'es' ? 'en' : 'es'); applyLang(); };
 $('btn-sound-t').onclick = toggleSound;
 $('btn-sound-m').onclick = toggleSound;
 $('btn-pixels-t').onclick = togglePixels;
 $('btn-pixels-m').onclick = togglePixels;
+$('btn-lang-t').onclick = toggleLang;
+$('btn-lang-m').onclick = toggleLang;
 $('btn-speed').onclick = () => {
   const order = [1, 1.5, 2];
   const s = order[(order.indexOf(getSpeed()) + 1) % order.length];
@@ -65,7 +91,7 @@ $('btn-speed').onclick = () => {
 // Audio can only start after a user gesture.
 document.addEventListener('pointerdown', () => initAudio(), { capture: true });
 document.addEventListener('keydown', () => initAudio(), { capture: true });
-document.addEventListener('click', (e) => { if (e.target.closest('button')) sfx('ui'); }, { capture: true });
+document.addEventListener('click', (e) => { if (e.target.closest('button') && !e.target.closest('#duo')) sfx('ui'); }, { capture: true });
 
 // ---------- 3D picking ----------
 let downAt = null;
@@ -102,11 +128,37 @@ function uniqueNames(list) {
   });
 }
 
+// Shows the minigame results on the handheld (if it's open), then closes it.
+async function mgResultsOnDuo(events, names) {
+  const mg = events.find((e) => e.t === 'mgResult');
+  if (!mg || !duo.isOpen) { if (mg && duo.isOpen) duo.close(); return; }
+  const rows = mg.scores.map((s) => ({ name: names[s.player], score: s.score, lose: mg.losers.includes(s.player) }));
+  await duo.results(rows, mg.game);
+  duo.close();
+}
+
 class LocalSession {
   // setup: { players: [{name, ctrl:'human'|'bot', level}], hp, itemMode }
   constructor(setup) { this.setup = setup; this.stopped = false; }
-  stop() { this.stopped = true; ui.cancelRequest(); }
+  stop() { this.stopped = true; ui.cancelRequest(); if (duo.isOpen) duo.close(); }
   present(events) { return view.play(redactEvents(events, this.viewer), this.game.snapshot()); }
+  async minigame(d) {
+    const S = this.setup;
+    const scores = [];
+    const humans = [];
+    this.game.players.forEach((p, i) => {
+      if (!p.alive) return;
+      if (S.players[i].ctrl === 'bot') scores[i] = botScore(d.game, S.players[i].level);
+      else humans.push(i);
+    });
+    for (const i of humans) {
+      if (this.stopped) return null;
+      if (humans.length > 1) { if (duo.isOpen) duo.close(); await ui.passScreen(S.players[i].name); }
+      scores[i] = await duo.play(d.game, d.seed, S.players[i].name);
+      if (scores[i] == null) scores[i] = 0;
+    }
+    return scores;
+  }
   async run() {
     const S = this.setup;
     const players = S.players.map((p, i) => ({ name: p.name, char: i }));
@@ -124,6 +176,14 @@ class LocalSession {
       const d = game.decision;
       const sp = S.players[d.player];
       let action = null;
+      if (d.kind === 'minigame') {
+        const scores = await this.minigame(d);
+        if (!scores || this.stopped) return;
+        const r = game.act(d.player, { type: 'scores', scores });
+        await mgResultsOnDuo(r.events, players.map((p) => p.name));
+        await this.present(r.events);
+        continue;
+      }
       if (sp.ctrl === 'bot') {
         await wait(d.kind === 'turn' ? 0.8 : 0.35);
         if (this.stopped) return;
@@ -145,7 +205,7 @@ class LocalSession {
       }
       const r = game.act(d.player, action);
       if (r.error) {
-        if (sp.ctrl === 'human') { ui.say(r.error, 2.5); continue; }
+        if (sp.ctrl === 'human') { ui.say(t('prob_' + r.error, { n: '' }), 2.5); continue; }
         const fb = game.act(d.player, d.kind === 'turn' ? { type: 'shoot', target: d.player } : { type: 'done' });
         if (!fb.error) await this.present(fb.events);
         continue;
@@ -169,14 +229,13 @@ async function startLocal(setup) {
   stopSession();
   app.localSetup = setup;
   app.session = new LocalSession(setup);
-  try { await app.session.run(); } catch (err) { console.error(err); ui.toast('Something broke. Back to the title.'); toTitle(); }
+  try { await app.session.run(); } catch (err) { console.error(err); ui.toast(t('t_broke')); toTitle(); }
 }
-
 function stopSession() {
   if (app.session) { app.session.stop(); app.session = null; }
   ui.cancelRequest();
+  if (duo.isOpen) duo.close();
 }
-
 function toTitle() {
   stopSession();
   if (app.online) { app.online.net.close(); app.online = null; }
@@ -187,43 +246,37 @@ function toTitle() {
 }
 
 // ---------- local setup screen ----------
-const LEVEL_OPTS = Object.entries(DIFFICULTIES).map(([k, v]) => `<option value="${k}">Bot: ${v}</option>`).join('');
-let localMode = 'vs';
-let seatCount = 2;
+const autoName = (i, type) => (type === 'human' ? `${getLang() === 'es' ? 'Jugador' : 'Player'} ${i + 1}` : charName(i));
+const isAutoName = (v) => allCharNames().includes(v) || /^(Player|Jugador) \d$/.test(v);
 function renderSeats(keep) {
   const prev = keep ? [...document.querySelectorAll('.seat')].map((r) => ({ name: r.querySelector('input').value, type: r.querySelector('select').value })) : [];
   const list = $('seat-list');
   list.innerHTML = '';
+  const levelOpts = DIFFICULTIES.map((k) => `<option value="${k}">${t('bot', { l: levelName(k) })}</option>`).join('');
   for (let i = 0; i < seatCount; i++) {
     const row = document.createElement('div');
     row.className = 'seat';
     const p = prev[i];
     let name, type;
-    if (p) { name = p.name; type = p.type; } else if (i === 0) { name = myName(); type = 'human'; } else if (localMode === 'vs') { name = CHARACTERS[i].name; type = 'hard'; } else { name = `Player ${i + 1}`; type = 'human'; }
-    row.innerHTML = `<span class="who">${CHARACTERS[i].name}</span><input maxlength="14" value=""><select><option value="human">Human</option>${LEVEL_OPTS}</select>`;
+    if (p) { type = p.type; name = i > 0 && isAutoName(p.name) ? autoName(i, type) : p.name; } else if (i === 0) { name = myName(); type = 'human'; } else { type = localMode === 'vs' ? 'hard' : 'human'; name = autoName(i, type); }
+    row.innerHTML = `<span class="who"></span><input maxlength="14" value=""><select><option value="human">${t('human')}</option>${levelOpts}</select>`;
+    row.querySelector('.who').textContent = charName(i);
     row.querySelector('input').value = name;
     row.querySelector('select').value = type;
     row.querySelector('select').onchange = (e) => {
       const inp = row.querySelector('input');
-      const isBotName = CHARACTERS.some((c) => c.name === inp.value) || /^Player \d$/.test(inp.value);
-      if (isBotName) inp.value = e.target.value === 'human' ? `Player ${i + 1}` : CHARACTERS[i].name;
+      if (isAutoName(inp.value)) inp.value = autoName(i, e.target.value);
     };
     list.appendChild(row);
   }
   document.querySelectorAll('#seg-count button').forEach((b) => b.classList.toggle('on', +b.dataset.n === seatCount));
 }
-const ITEM_HINTS = {
-  progressive: 'Round 1: no items. Round 2: 2 each, round 3: 3 each, and so on. You hold up to 8 — extras are lost.',
-  draft: 'Same amounts as Progressive, but everyone takes turns picking from one shared tray.',
-  shop: 'Survive a round to earn chips (3 + damage you dealt). Spend them in the shop each round.',
-  none: 'No items. Just nerve and a bit of counting.',
-};
-function itemHint() { $('items-hint').textContent = ITEM_HINTS[$('opt-items').value]; }
+function itemHint() { $('items-hint').textContent = t('hint_' + $('opt-items').value); }
 $('opt-items').onchange = itemHint;
 function openLocal(mode) {
   localMode = mode;
-  seatCount = mode === 'vs' ? 2 : 2;
-  $('local-title').textContent = mode === 'vs' ? 'VS COMPUTER' : 'PASS & PLAY';
+  seatCount = 2;
+  $('local-title').textContent = t(mode === 'vs' ? 'vs' : 'pass');
   const last = store.get('local', null);
   if (last) { $('opt-hp').value = String(last.hp); $('opt-items').value = last.itemMode; }
   renderSeats(false);
@@ -238,10 +291,10 @@ $('btn-local-start').onclick = () => {
   const rows = [...document.querySelectorAll('.seat')];
   const names = uniqueNames(rows.map((r) => r.querySelector('input').value));
   const players = rows.map((r, i) => {
-    const t = r.querySelector('select').value;
-    return t === 'human' ? { name: names[i], ctrl: 'human' } : { name: names[i], ctrl: 'bot', level: t };
+    const ty = r.querySelector('select').value;
+    return ty === 'human' ? { name: names[i], ctrl: 'human' } : { name: names[i], ctrl: 'bot', level: ty };
   });
-  if (!players.some((p) => p.ctrl === 'human')) { ui.toast('Someone has to be human.'); return; }
+  if (!players.some((p) => p.ctrl === 'human')) { ui.toast(t('t_needHuman')); return; }
   const setup = { players, hp: +$('opt-hp').value, itemMode: $('opt-items').value };
   store.set('local', { hp: setup.hp, itemMode: setup.itemMode });
   app.wins = {};
@@ -251,14 +304,11 @@ $('btn-local-start').onclick = () => {
 // ---------- title / help / menu ----------
 $('btn-help').onclick = () => { app.helpBack = 'screen-title'; ui.show('screen-help'); };
 $('btn-help-m').onclick = () => { app.helpBack = 'screen-menu'; ui.show('screen-help'); };
-$('btn-help-close').onclick = () => { if (app.helpBack === 'screen-menu') ui.show('screen-menu'); else ui.show('screen-title'); };
+$('btn-help-close').onclick = () => ui.show(app.helpBack === 'screen-menu' ? 'screen-menu' : 'screen-title');
 $('btn-menu').onclick = () => ui.show('screen-menu');
 $('btn-resume').onclick = () => ui.hideScreens();
 $('btn-quit').onclick = () => toTitle();
-$('btn-score-menu').onclick = () => {
-  if (app.online && app.online.role === 'host') { hostToLobby(); return; }
-  toTitle();
-};
+$('btn-score-menu').onclick = () => { if (app.online && app.online.role === 'host') { hostToLobby(); return; } toTitle(); };
 $('btn-rematch').onclick = () => {
   if (app.online && app.online.role === 'host') { hostStartGame(); return; }
   if (app.localSetup) startLocal(app.localSetup);
@@ -272,21 +322,18 @@ $('in-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-
 
 $('btn-create').onclick = async () => {
   store.set('name', $('in-name').value.trim());
-  $('online-status').textContent = 'Opening a room…';
+  $('online-status').textContent = t('opening');
   $('btn-create').disabled = true;
   const net = new HostNet();
   try {
     const code = await net.open();
-    app.online = {
-      role: 'host', net, code,
-      lobby: { players: [{ name: myName(), kind: 'host' }], hp: 4, itemMode: 'progressive' },
-    };
+    app.online = { role: 'host', net, code, lobby: { players: [{ name: myName(), kind: 'host' }], hp: 4, itemMode: 'progressive' } };
     app.wins = {};
     wireHost();
     renderLobby();
     ui.show('screen-lobby');
   } catch (err) {
-    $('online-status').textContent = err.message;
+    $('online-status').textContent = t(err.message);
   } finally {
     $('btn-create').disabled = false;
   }
@@ -306,13 +353,12 @@ function wireHost() {
   const net = O.net;
   net.onJoin = (conn, name) => {
     const L = O.lobby;
-    if (O.session) { net.kick(conn, 'That game already started.'); return; }
-    if (L.players.length >= 4) { net.kick(conn, 'The room is full (4 players).'); return; }
-    const taken = L.players.map((p) => p.name);
-    const unique = uniqueNames([...taken, name]).pop();
+    if (O.session) { net.kick(conn, 'rj_started'); return; }
+    if (L.players.length >= 4) { net.kick(conn, 'rj_full'); return; }
+    const unique = uniqueNames([...L.players.map((p) => p.name), name]).pop();
     L.players.push({ name: unique, kind: 'remote', conn });
     net.send(conn, { t: 'welcome', name: unique });
-    ui.toast(`${unique} joined.`);
+    ui.toast(t('t_joined', { n: unique }));
     sfx('pop');
     broadcastLobby();
   };
@@ -321,22 +367,18 @@ function wireHost() {
     const i = L.players.findIndex((p) => p.conn === conn);
     if (i < 0) return;
     const p = L.players[i];
-    if (O.session && !O.session.stopped) {
-      O.session.onRemoteLeave(i);
-    } else {
-      L.players.splice(i, 1);
-      ui.toast(`${p.name} left.`);
-      broadcastLobby();
-    }
+    if (O.session && !O.session.stopped) O.session.onRemoteLeave(i);
+    else { L.players.splice(i, 1); ui.toast(t('t_left', { n: p.name })); broadcastLobby(); }
   };
   net.onMsg = (conn, msg) => {
     if (msg.t === 'act' && O.session) O.session.onRemoteAction(conn, msg);
+    else if (msg.t === 'mg' && O.session) O.session.onMg(conn, msg);
     else if (msg.t === 'resync') {
       if (O.session && O.session.game && !O.session.stopped) O.session.resync(conn, !!msg.inGame);
       else if (!O.session) net.send(conn, lobbyMsg());
     }
   };
-  net.onError = (text) => ui.toast(text);
+  net.onError = (text) => ui.toast(t(text));
 }
 
 function renderLobby() {
@@ -350,16 +392,16 @@ function renderLobby() {
   list.innerHTML = '';
   L.players.forEach((p, i) => {
     const li = document.createElement('li');
-    const tag = p.kind === 'host' ? 'host' : p.kind === 'bot' ? `bot · ${DIFFICULTIES[p.level]}` : `player${p.via ? ` · ${p.via}` : ''}`;
-    const youMark = (host && i === 0) || (!host && p.name === O.myName && p.kind === 'remote') ? ' (you)' : '';
-    li.innerHTML = `<span>${CHARACTERS[i].name} — <b></b>${youMark}</span><span class="tag">${tag}</span>`;
+    const tag = p.kind === 'host' ? t('tagHost') : p.kind === 'bot' ? t('tagBot', { l: levelName(p.level) }) : `${t('tagPlayer')}${p.via ? ` · ${t('via_' + p.via)}` : ''}`;
+    const youMark = (host && i === 0) || (!host && p.name === O.myName && p.kind === 'remote') ? t('youMark') : '';
+    li.innerHTML = `<span>${charName(i)} — <b></b>${youMark}</span><span class="tag">${tag}</span>`;
     li.querySelector('b').textContent = p.name;
     if (host && i > 0) {
       const x = document.createElement('button');
-      x.textContent = p.kind === 'bot' ? 'REMOVE' : 'KICK';
+      x.textContent = p.kind === 'bot' ? t('remove') : t('kick');
       x.onclick = () => {
         const real = O.lobby.players[i];
-        if (real.kind === 'remote') O.net.kick(real.conn, 'The host removed you.');
+        if (real.kind === 'remote') O.net.kick(real.conn, 'rj_kicked');
         O.lobby.players.splice(i, 1);
         broadcastLobby();
       };
@@ -371,20 +413,19 @@ function renderLobby() {
   $('btn-lobby-start').classList.toggle('hidden', !host);
   $('lobby-hp').value = String(L.hp);
   $('lobby-items').value = L.itemMode;
-  const modeName = { progressive: 'Progressive', draft: 'Draft', shop: 'Shop', none: 'No items' }[L.itemMode];
+  const mode = t('mode_' + L.itemMode);
   $('lobby-info').textContent = host
-    ? (L.players.length < 2 ? 'Waiting for players… share the code or add a bot.' : `${L.players.length} players ready. HP ${L.hp} · Items: ${modeName}.`)
-    : `HP ${L.hp} · Items: ${modeName}. Waiting for the host to start…`;
+    ? (L.players.length < 2 ? t('lobbyWait') : t('lobbyReady', { n: L.players.length, hp: L.hp, mode }))
+    : t('lobbyClient', { hp: L.hp, mode });
   $('btn-lobby-start').disabled = L.players.length < 2;
   $('btn-add-bot').disabled = L.players.length >= 4;
 }
 $('btn-add-bot').onclick = () => {
   const O = app.online;
   if (!O || O.role !== 'host' || O.lobby.players.length >= 4) return;
-  const level = $('lobby-bot-level').value;
   const i = O.lobby.players.length;
-  const name = uniqueNames([...O.lobby.players.map((p) => p.name), CHARACTERS[i].name]).pop();
-  O.lobby.players.push({ name, kind: 'bot', level });
+  const name = uniqueNames([...O.lobby.players.map((p) => p.name), charName(i)]).pop();
+  O.lobby.players.push({ name, kind: 'bot', level: $('lobby-bot-level').value });
   broadcastLobby();
 };
 $('lobby-hp').onchange = () => { if (app.online && app.online.role === 'host') { app.online.lobby.hp = +$('lobby-hp').value; broadcastLobby(); } };
@@ -398,11 +439,11 @@ const inviteLink = () => {
   for (const k of ['peer', 'relay', 'p2p']) if (cur.get(k)) q.set(k, cur.get(k));
   return `${location.origin}${location.pathname}?${q}`;
 };
-async function copy(text, okMsg) {
-  try { await navigator.clipboard.writeText(text); ui.toast(okMsg); } catch (e) { ui.toast(text, 4000); }
+async function copy(text, okKey) {
+  try { await navigator.clipboard.writeText(text); ui.toast(t(okKey)); } catch (e) { ui.toast(text, 4000); }
 }
-$('btn-copy-code').onclick = () => copy(app.online.code, 'Code copied.');
-$('btn-copy-link').onclick = () => copy(inviteLink(), 'Invite link copied.');
+$('btn-copy-code').onclick = () => copy(app.online.code, 't_copiedCode');
+$('btn-copy-link').onclick = () => copy(inviteLink(), 't_copiedLink');
 
 function hostToLobby() {
   const O = app.online;
@@ -417,8 +458,14 @@ function hostToLobby() {
 }
 
 class HostSession {
-  constructor(O) { this.O = O; this.stopped = false; this.waiting = null; this.seq = 0; this.lastAid = {}; this.pending = {}; }
-  stop() { this.stopped = true; ui.cancelRequest(); if (this.waiting) { const w = this.waiting; this.waiting = null; w.res(null); } }
+  constructor(O) { this.O = O; this.stopped = false; this.waiting = null; this.seq = 0; this.lastAid = {}; this.pending = {}; this.mg = null; this.earlyMg = {}; }
+  stop() {
+    this.stopped = true;
+    ui.cancelRequest();
+    if (duo.isOpen) duo.close();
+    if (this.waiting) { const w = this.waiting; this.waiting = null; w.res(null); }
+    if (this.mg) Object.values(this.mg.waits).forEach((res) => res(0));
+  }
   seats() { return this.O.lobby.players; }
   present(events) {
     const snap = this.game.snapshot();
@@ -448,10 +495,40 @@ class HostSession {
     }
     return new Promise((res) => { this.waiting = { seat: i, res }; });
   }
-  // A friend missed a message (or the game start): send them the current state.
-  resync(conn, inGame) {
+  // Minigame scores from friends (they play on their own screens at the same time).
+  onMg(conn, msg) {
+    const i = this.seats().findIndex((p) => p.kind === 'remote' && p.conn === conn);
+    if (i < 0) return;
+    const score = Math.max(0, Math.min(100000, Number(msg.score) || 0));
+    if (this.mg && this.mg.seed === msg.seed) {
+      if (this.mg.waits[i]) { const res = this.mg.waits[i]; delete this.mg.waits[i]; res(score); }
+    } else this.earlyMg[`${msg.seed}:${i}`] = score;
+  }
+  async minigame(d) {
     const seats = this.seats();
-    const i = seats.findIndex((p) => p.kind === 'remote' && p.conn === conn);
+    const scores = [];
+    const jobs = [];
+    this.mg = { seed: d.seed, waits: {} };
+    this.game.players.forEach((p, i) => {
+      if (!p.alive) return;
+      const s = seats[i];
+      if (s.kind === 'bot') scores[i] = botScore(d.game, s.level);
+      else if (s.kind === 'host') jobs.push(duo.play(d.game, d.seed, s.name).then((v) => { scores[i] = v || 0; if (!this.stopped) duo.message(`${v || 0}`, t('mgWait')); }));
+      else {
+        const early = this.earlyMg[`${d.seed}:${i}`];
+        if (early != null) { scores[i] = early; return; }
+        jobs.push(new Promise((res) => {
+          this.mg.waits[i] = res;
+          setTimeout(() => { if (this.mg && this.mg.waits[i]) { delete this.mg.waits[i]; res(0); } }, 75000);
+        }).then((v) => { scores[i] = v; }));
+      }
+    });
+    await Promise.all(jobs);
+    this.mg = null;
+    return scores;
+  }
+  resync(conn, inGame) {
+    const i = this.seats().findIndex((p) => p.kind === 'remote' && p.conn === conn);
     if (i < 0 || !this.game) return;
     const snap = this.game.snapshot();
     if (!inGame) this.O.net.send(conn, { t: 'start', players: this.players, you: i, pre: snap });
@@ -462,10 +539,10 @@ class HostSession {
     p.kind = 'bot';
     p.level = 'hard';
     p.conn = null;
-    const text = `${p.name} disconnected — a bot takes their seat.`;
-    ui.toast(text, 3000);
-    this.seats().forEach((q) => { if (q.kind === 'remote' && q.conn) this.O.net.send(q.conn, { t: 'note', text }); });
+    ui.toast(t('t_dc', { n: p.name }), 3000);
+    this.seats().forEach((q) => { if (q.kind === 'remote' && q.conn) this.O.net.send(q.conn, { t: 'note', key: 't_dc', n: p.name }); });
     if (this.waiting && this.waiting.seat === i) { const w = this.waiting; this.waiting = null; w.res(null); }
+    if (this.mg && this.mg.waits[i]) { const res = this.mg.waits[i]; delete this.mg.waits[i]; res(botScore(this.game.decision.game, 'hard')); }
   }
   async run() {
     const seats = this.seats();
@@ -484,6 +561,14 @@ class HostSession {
       const d = game.decision;
       const seat = seats[d.player];
       let action = null;
+      if (d.kind === 'minigame') {
+        const scores = await this.minigame(d);
+        if (this.stopped) return;
+        const r = game.act(d.player, { type: 'scores', scores });
+        await mgResultsOnDuo(r.events, players.map((p) => p.name));
+        await this.present(r.events);
+        continue;
+      }
       if (seat.kind === 'remote') {
         action = await this.waitRemote(d.player);
         if (this.stopped) return;
@@ -499,8 +584,8 @@ class HostSession {
       }
       const r = game.act(d.player, action);
       if (r.error) {
-        if (seat.kind === 'remote') { this.O.net.send(seat.conn, { t: 'err', msg: r.error }); continue; }
-        if (seat.kind === 'host') { ui.say(r.error, 2.5); continue; }
+        if (seat.kind === 'remote') { this.O.net.send(seat.conn, { t: 'err', code: r.error }); continue; }
+        if (seat.kind === 'host') { ui.say(t('prob_' + r.error, { n: '' }), 2.5); continue; }
         const fb = game.act(d.player, d.kind === 'turn' ? { type: 'shoot', target: d.player } : { type: 'done' });
         if (!fb.error) await this.present(fb.events);
         continue;
@@ -508,8 +593,8 @@ class HostSession {
       await this.present(r.events);
     }
     if (this.stopped) return;
-    finishGame(game.snapshot(), true, 'Rematch starts a new game for everyone. Lobby lets you change settings.');
-    $('btn-score-menu').textContent = 'LOBBY';
+    finishGame(game.snapshot(), true, t('hostHint'));
+    $('btn-score-menu').textContent = t('lobbyBtn');
   }
 }
 
@@ -519,15 +604,15 @@ async function hostStartGame() {
   if (O.session) O.session.stop();
   O.session = new HostSession(O);
   app.session = O.session;
-  try { await O.session.run(); } catch (err) { console.error(err); ui.toast('Something broke.'); hostToLobby(); }
+  try { await O.session.run(); } catch (err) { console.error(err); ui.toast(t('t_broke')); hostToLobby(); }
 }
 
 // ----- client -----
 $('btn-join').onclick = async () => {
   const code = cleanCode($('in-code').value);
-  if (code.length !== 4) { $('online-status').textContent = 'Room codes are 4 characters.'; return; }
+  if (code.length !== 4) { $('online-status').textContent = t('codeLen'); return; }
   store.set('name', $('in-name').value.trim());
-  $('online-status').textContent = `Knocking on room ${code}…`;
+  $('online-status').textContent = t('knocking', { code });
   $('btn-join').disabled = true;
   const net = new ClientNet();
   try {
@@ -535,13 +620,13 @@ $('btn-join').onclick = async () => {
     app.online = { role: 'client', net, code, lobby: null, myName: welcome.name || myName(), session: null };
     app.wins = {};
     net.onMsg = (msg) => clientMsg(msg);
-    net.onClose = () => { if (app.online && app.online.net === net) { ui.toast('Lost connection to the host.', 3500); toTitle(); } };
+    net.onClose = () => { if (app.online && app.online.net === net) { ui.toast(t('t_hostLost'), 3500); toTitle(); } };
     startClientSyncLoop(app.online);
-    $('lobby-info').textContent = 'Joined. Waiting for the host…';
+    $('lobby-info').textContent = t('joinedWait');
     ui.show('screen-lobby');
     renderLobby();
   } catch (err) {
-    $('online-status').textContent = err.message;
+    $('online-status').textContent = t(err.message);
   } finally {
     $('btn-join').disabled = false;
   }
@@ -554,7 +639,7 @@ function clientMsg(msg) {
     case 'lobby':
       O.lobby = msg;
       O.code = msg.code || O.code;
-      if (!O.session) { renderLobby(); }
+      if (!O.session) renderLobby();
       break;
     case 'start':
       stopSession();
@@ -564,8 +649,8 @@ function clientMsg(msg) {
       break;
     case 'ev': if (O.session) O.session.onEvents(msg); break;
     case 'state': if (O.session) O.session.onState(msg); break;
-    case 'err': if (O.session) O.session.onError(msg.msg); break;
-    case 'note': ui.toast(msg.text, 3000); break;
+    case 'err': if (O.session) O.session.onError(msg.code); break;
+    case 'note': ui.toast(msg.key ? t(msg.key, { n: msg.n }) : msg.text, 3000); break;
     case 'toLobby':
       stopSession();
       O.session = null;
@@ -574,8 +659,8 @@ function clientMsg(msg) {
       renderLobby();
       ui.show('screen-lobby');
       break;
-    case 'reject': ui.toast(msg.reason || 'Removed from the room.', 3500); toTitle(); break;
-    case 'closed': ui.toast('The host closed the room.', 3500); toTitle(); break;
+    case 'reject': ui.toast(t(msg.reason || 't_removed'), 3500); toTitle(); break;
+    case 'closed': ui.toast(t('t_hostClosed'), 3500); toTitle(); break;
   }
 }
 
@@ -592,10 +677,12 @@ class ClientSession {
     this.nextSeq = 1;
     this.aid = 0;
     this.pendingAct = null;
+    this.mgPlayed = null;
+    this.inMg = false;
   }
-  stop() { this.stopped = true; ui.cancelRequest(); this.clearPending(); }
+  stop() { this.stopped = true; ui.cancelRequest(); this.clearPending(); if (duo.isOpen) duo.close(); }
   clearPending() { this.pendingAct = null; clearInterval(this.resendT); }
-  idle() { return !this.busy && !ui.req && !this.pendingAct && !(this.lastSnap && this.lastSnap.over); }
+  idle() { return !this.busy && !ui.req && !this.pendingAct && !this.inMg && !(this.lastSnap && this.lastSnap.over); }
   start() {
     view.setup(this.players, this.you, this.pre);
     ui.hideScreens();
@@ -618,13 +705,14 @@ class ClientSession {
     this.queue = [{ ev: [], snap: msg.snap }];
     this.pump();
   }
-  onError(text) { this.clearPending(); ui.say(text, 2.5); if (!this.busy) this.ask(this.lastSnap); }
+  onError(code) { this.clearPending(); ui.say(t('prob_' + code, { n: '' }), 2.5); if (!this.busy) this.ask(this.lastSnap); }
   async pump() {
     if (this.busy) return;
     this.busy = true;
     ui.cancelRequest();
     while (this.queue.length && !this.stopped) {
       const m = this.queue.shift();
+      await mgResultsOnDuo(m.ev, this.players.map((p) => p.name));
       await view.play(m.ev, m.snap);
       this.lastSnap = m.snap;
     }
@@ -632,9 +720,23 @@ class ClientSession {
     if (this.stopped) return;
     const s = this.lastSnap;
     if (s.over) {
-      finishGame(s, false, 'Waiting for the host to start a rematch…');
-      $('btn-score-menu').textContent = 'LEAVE ROOM';
-    } else if (s.decision && s.decision.player === this.you) this.ask(s);
+      finishGame(s, false, t('clientHint'));
+      $('btn-score-menu').textContent = t('leaveRoom');
+    } else if (s.decision && s.decision.kind === 'minigame') this.playMinigame(s);
+    else if (s.decision && s.decision.player === this.you) this.ask(s);
+  }
+  async playMinigame(s) {
+    const d = s.decision;
+    if (this.mgPlayed === d.seed || !s.players[this.you].alive) return;
+    this.mgPlayed = d.seed;
+    this.inMg = true;
+    const score = await duo.play(d.game, d.seed, s.players[this.you].name);
+    this.inMg = false;
+    if (score == null || this.stopped) return;
+    duo.message(`${score}`, t('mgWait'));
+    const msg = { t: 'mg', score, seed: d.seed };
+    this.O.net.send(msg);
+    setTimeout(() => { if (this.lastSnap === s && !this.stopped) this.O.net.send(msg); }, 5000); // in case it got lost
   }
   async ask(s) {
     if (!s || !s.decision || s.decision.player !== this.you || s.over) return;
@@ -655,8 +757,8 @@ class ClientSession {
 // Safety net for lossy connections: every few seconds, while nothing is
 // happening, ask the host whether we missed anything (game start or events).
 function startClientSyncLoop(O) {
-  const t = setInterval(() => {
-    if (app.online !== O) { clearInterval(t); return; }
+  const timer = setInterval(() => {
+    if (app.online !== O) { clearInterval(timer); return; }
     const s = O.session;
     if (!s) O.net.send({ t: 'resync', inGame: false });
     else if (s.idle()) O.net.send({ t: 'resync', inGame: true });
@@ -664,16 +766,14 @@ function startClientSyncLoop(O) {
 }
 
 // ---------- boot ----------
+applyLang();
 const params = new URLSearchParams(location.search);
 const roomParam = cleanCode(params.get('room'));
 if (roomParam.length === 4) {
   $('in-code').value = roomParam;
   ui.show('screen-online');
-  $('online-status').textContent = 'Type your name on the title screen if you like, then press JOIN.';
-} else {
-  ui.show('screen-title');
-}
-$('btn-score-menu').textContent = 'MAIN MENU';
-// restore score-menu label whenever we leave the scoreboard
+  $('online-status').textContent = t('typeName');
+} else ui.show('screen-title');
+// restore the score-menu label whenever we leave the scoreboard
 const _show = ui.show.bind(ui);
-ui.show = (id) => { if (id !== 'screen-score') $('btn-score-menu').textContent = 'MAIN MENU'; _show(id); };
+ui.show = (id) => { if (id !== 'screen-score') $('btn-score-menu').textContent = t('mainMenu'); _show(id); };

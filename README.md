@@ -31,29 +31,54 @@ order nobody knows. On your turn use any items you like, then point the gun at y
 | Shop | Surviving a round earns chips (3 + damage you dealt). Spend them in the shop each round. |
 | No items | Pure nerve. |
 
-Everyone holds at most **8 items**. Anything that doesn't fit is lost.
+Everyone holds at most **8 items**. Anything that doesn't fit is lost. In Draft, the pool has one spare item per player so the last picker still gets a choice.
 
 ### Items
 
 | Item | Effect |
 | --- | --- |
-| Stethoscope | Learn if the current shell is live or blank (only you see it). |
+| Stethoscope | Learn if the current shell is live or blank (only you hear it: a heartbeat means live, silence means blank). |
 | Pry Bar | Pop the current shell out without firing. Everyone sees what it was. |
-| Hollow Point | Your next live shot deals 2 damage. |
+| Saw | Cut the barrel short: your next shot deals double damage. One shot only, live or blank. |
 | Bandage | Heal 1 HP. |
-| Boodoo Doll | The next shot another player aims at you bounces back at the shooter. |
+| Medkit *(rare)* | Heal to full HP. |
+| Shield | Adds 1 shield to your health bar; it blocks 1 damage. Stacks. |
+| Boodoo Doll *(rare)* | The next shot another player aims at you bounces back at them. If the shooter has a doll up too, theirs parries yours. |
 | Mirror *(rare)* | Swap your whole stash of items with another player. |
 | Rigged Dice | Reshuffle every shell left in the gun. |
 | Pickpocket Glove | Steal a random item from another player. |
 | Golden Glove | Steal the item of your choice from another player. |
+| Trash Can | Throw away one item of your choice from another player. |
+| Smelly Trash Can | 25% of all items on the table rot away — yours too, but yours are 25% less likely to. |
 | Fake Shell | Slip an extra blank into the gun at a random spot. |
-| Life Insurance *(rare)* | If you die before this round ends, come back with 1 HP. |
-| Double Barrel | Your next shot fires the next two shells at once. |
+| Life Insurance *(rare)* | Sign it, and the next time you die you come back with 1 HP. Lasts until it pays out. |
+| Angel Wings *(rare)* | Bring a dead player back with half their HP — or keep them: if you die holding them, you come back. |
+| Double Barrel | Upgrades the gun with a second barrel: your next shot fires the next two shells at once. |
 | Switch | Every live shell left becomes blank and every blank becomes live. |
-| Drug Syringe | 50/50: heal 3 HP, or lose 2 HP. |
+| Drug Syringe | 50/50: heal 3 HP, or lose 1 HP. |
 | Handcuffs | Pick a player — they skip their next turn. |
+| Hacking Device | Pick a player — they can't use items on their next turn. |
 | Rotator | Reverse the turn order. |
 | Phone | A voice tells you one random shell left in the gun and its position (only you hear it). |
+| Pocket Duo *(super rare)* | Everyone plays a minigame you choose. The bottom half of the scores loses 1 HP. |
+
+Whoever is due to shoot next picks items first (Draft and Shop), so a blank on the last shell, aimed at yourself, buys
+you first pick.
+
+### Pocket Duo (handheld minigames) — prototype
+
+An original dual-screen clamshell. The player who uses it picks a game from the menu, then everyone alive plays the
+same game (same random seed) on their own screen, and scores are compared. Controls: **WASD / arrow keys + Space**
+(A) / **Esc** (B); on phones, the on-screen D-pad (slide your finger around it), A/B buttons, and dragging on the
+bottom screen. Bots get a simulated score based on their difficulty.
+
+Prototype games: Paddle Panic (button mash), Quick Draw (reaction), Nail It (timing gauge), Firefly Jar (move & catch),
+Shell Game (follow the cup), Lily Pad Hop (memory sequence), Count the Live Ones (counting), Steady Bobber (balance).
+
+### Language
+
+Spanish by default; switch with **LANGUAGE / IDIOMA** on the title screen or in the pause menu. Every player online
+sees the game in their own language.
 
 ### Bots
 
@@ -123,7 +148,9 @@ npm test
 | `js/models.js` | Every model, built from basic shapes. Swap any `make*()` for a loaded CC0 model later. |
 | `js/gfx.js` | PS1 vertex snapping, procedural pixel textures, tween system. |
 | `js/audio.js` | Synthesized sound effects and swamp ambience. |
-| `js/ui.js` | Captions, HUD, action bar, pickers, scoreboard. |
+| `js/ui.js` | Captions, HUD, action bar, tap-at-the-table targeting, scoreboard. |
+| `js/i18n.js` | All text in Spanish and English. |
+| `js/minigames.js` | The Pocket Duo console interface and its minigames. |
 | `js/net.js` | Online rooms: direct (PeerJS) and relay (MQTT) racing, heartbeats, re-join. |
 | `js/main.js` | App flow: local, pass-and-play, online host and client sessions. |
 | `lib/` | Vendored Three.js r160, PeerJS 1.5.4 and MQTT.js 5.10.1 (all MIT). |

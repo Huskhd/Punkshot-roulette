@@ -103,7 +103,7 @@ export class HostNet {
   }
 
   open() {
-    if (!p2pEnabled() && !relayEnabled()) return Promise.reject(new Error('Online play could not load.'));
+    if (!p2pEnabled() && !relayEnabled()) return Promise.reject(new Error('net_noOnline'));
     return new Promise((resolve, reject) => {
       let tries = 0;
       const attempt = () => {
@@ -114,7 +114,7 @@ export class HostNet {
         const finish = () => {
           if (settled) return;
           if (state.p2pOpen || (state.relayUp && (state.p2pFailed || waited))) { settled = true; this.code = code; this.startHeartbeat(); resolve(code); return; }
-          if (state.p2pFailed && state.relayFailed) { settled = true; this.shutdown(); reject(new Error('Can\'t reach the online servers. Check your connection.')); }
+          if (state.p2pFailed && state.relayFailed) { settled = true; this.shutdown(); reject(new Error('net_noServers')); }
         };
         let waited = false;
         // Give the direct broker a moment to confirm the code is unique.
@@ -267,7 +267,7 @@ export class ClientNet {
   deliver(m) { if (this._onMsg) this._onMsg(m); else this.queue.push(m); }
 
   join(code, name) {
-    if (!p2pEnabled() && !relayEnabled()) return Promise.reject(new Error('Online play could not load.'));
+    if (!p2pEnabled() && !relayEnabled()) return Promise.reject(new Error('net_noOnline'));
     const cid = randomId();
     return new Promise((resolve, reject) => {
       let done = false;
@@ -303,10 +303,10 @@ export class ClientNet {
       };
       const handshake = (link) => (m) => {
         if (m.t === 'welcome') win(link, m);
-        else if (m.t === 'reject' && !done) lose(m.reason || 'The room said no.');
+        else if (m.t === 'reject' && !done) lose(m.reason || 'rj_no');
       };
-      this.timers.push(setTimeout(() => lose(missing || reached ? 'Room not found. Check the code — and that the host is still on the lobby screen.' : 'Can\'t reach the online servers. Check your connection.'), 15000));
-      this.timers.push(setTimeout(() => { if (missing && this.brokers.some((b) => b.connected)) lose('Room not found. Check the code.'); }, 8000));
+      this.timers.push(setTimeout(() => lose(missing || reached ? 'net_notFound' : 'net_noServers'), 15000));
+      this.timers.push(setTimeout(() => { if (missing && this.brokers.some((b) => b.connected)) lose('net_notFound'); }, 8000));
 
       if (p2pEnabled()) {
         const peer = new window.Peer(peerOpts());

@@ -301,8 +301,8 @@ export function makeHand(side = 1) {
     fingers.push(piv);
   }
   const thumb = new THREE.Group();
-  thumb.position.set(-side * 0.075, 0.03, 0.0);
-  thumb.rotation.y = -side * 0.7;
+  thumb.position.set(side * 0.075, 0.03, 0.0); // inner side of the hand
+  thumb.rotation.y = side * 0.7;
   thumb.add(put(obox(0.034, 0.036, 0.085, HAND_MAT), 0, 0, 0.04));
   inner.add(thumb);
   g.userData = { fingers, thumb, side, inner, curl: 0 };
@@ -317,7 +317,7 @@ export function setCurl(hand, k) {
     f.userData.seg2.rotation.x = k * 1.5;
   });
   u.thumb.rotation.x = k * 0.6;
-  u.thumb.rotation.y = -u.side * (0.7 - k * 0.6);
+  u.thumb.rotation.y = u.side * (0.7 - k * 0.6);
 }
 
 // ---------------- shotgun ----------------
@@ -331,9 +331,21 @@ export function makeGun() {
   body.add(put(box(0.07, 0.09, 0.06, woodDark), 0, -0.07, -0.16, 0.5, 0, 0)); // grip
   body.add(put(box(0.075, 0.095, 0.24, metal), 0, 0.01, -0.05)); // receiver
   body.add(put(box(0.02, 0.03, 0.06, dark), 0.04, 0.025, -0.06)); // ejection port
-  body.add(put(cyl(0.022, 0.022, 0.56, 7, dark), 0, 0.035, 0.34, Math.PI / 2, 0, 0)); // barrel
-  body.add(put(cyl(0.017, 0.017, 0.46, 6, metal), 0, -0.012, 0.29, Math.PI / 2, 0, 0)); // mag tube
-  body.add(put(box(0.012, 0.02, 0.012, lam(0xbbaa66)), 0, 0.065, 0.61)); // bead
+  body.add(put(cyl(0.022, 0.022, 0.36, 7, dark), 0, 0.035, 0.24, Math.PI / 2, 0, 0)); // barrel (rear)
+  body.add(put(cyl(0.017, 0.017, 0.36, 6, metal), 0, -0.012, 0.24, Math.PI / 2, 0, 0)); // mag tube (rear)
+  const tip = new THREE.Group(); // the part the Saw cuts off
+  tip.add(put(cyl(0.022, 0.022, 0.2, 7, dark), 0, 0.035, 0.52, Math.PI / 2, 0, 0));
+  tip.add(put(cyl(0.017, 0.017, 0.1, 6, metal), 0, -0.012, 0.47, Math.PI / 2, 0, 0));
+  tip.add(put(box(0.012, 0.02, 0.012, lam(0xbbaa66)), 0, 0.065, 0.61)); // bead
+  body.add(tip);
+  const extra = new THREE.Group(); // Double Barrel upgrade
+  extra.add(put(cyl(0.022, 0.022, 0.36, 7, dark), 0.046, 0.035, 0.24, Math.PI / 2, 0, 0));
+  extra.add(put(box(0.03, 0.02, 0.3, metal), 0.023, 0.035, 0.24));
+  const extraTip = new THREE.Group();
+  extraTip.add(put(cyl(0.022, 0.022, 0.2, 7, dark), 0.046, 0.035, 0.52, Math.PI / 2, 0, 0));
+  extra.add(extraTip);
+  extra.visible = false;
+  body.add(extra);
   body.add(put(torus(0.03, 0.006, 4, 8, Math.PI, dark), 0, -0.05, -0.08, 0, Math.PI / 2, 0)); // trigger guard
   const pump = new THREE.Group();
   pump.add(put(cyl(0.033, 0.033, 0.17, 7, wood), 0, 0, 0, Math.PI / 2, 0, 0));
@@ -366,15 +378,28 @@ export function makeGun() {
   body.add(light);
   g.traverse((o) => { if (o.isMesh && !o.material.transparent) o.castShadow = true; });
   g.userData = {
-    body, pump, flash, light,
+    body, pump, flash, light, tip, extra, extraTip,
     muzzle: V(0, 0.035, 0.62), port: V(0.05, 0.03, -0.06),
     grip: V(0, -0.08, -0.17), fore: V(0, -0.02, 0.2),
   };
   return g;
 }
+// saw: barrel cut short; double: second barrel mounted.
+export function setGunState(gun, { saw, double }) {
+  const u = gun.userData;
+  u.tip.visible = !saw;
+  u.extra.visible = !!double;
+  u.extraTip.visible = !saw;
+  u.flash.position.z = saw ? 0.42 : 0.62;
+  u.muzzle.z = saw ? 0.42 : 0.62;
+}
+// The sawn-off piece that drops to the table.
+export function makeBarrelTip() {
+  return group(put(cyl(0.022, 0.022, 0.2, 7, lam(0x18191b)), 0, 0, 0, Math.PI / 2, 0, 0));
+}
 
 // ---------------- shells ----------------
-const SHELL_LIVE = 0xb3232b, SHELL_BLANK = 0x2c5b9e, SHELL_FAKE = 0x2c5b9e;
+const SHELL_LIVE = 0xb3232b, SHELL_BLANK = 0x1c1c1f;
 export function makeShell(live) {
   const g = new THREE.Group();
   g.add(put(cyl(0.019, 0.019, 0.062, 8, lam(live ? SHELL_LIVE : SHELL_BLANK)), 0, 0.049, 0));
@@ -430,6 +455,31 @@ export function makeCandle() {
   return g;
 }
 
+// Glowing ring on the table marking a pickable player.
+export function makeTargetRing(color = 0xffcc55) {
+  const m = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.018, 4, 20), basic(color, { transparent: true, opacity: 0.9, depthWrite: false }));
+  m.rotation.x = Math.PI / 2;
+  // invisible disc so a tap anywhere inside the ring counts
+  const hit = new THREE.Mesh(new THREE.CircleGeometry(0.27, 12), new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide }));
+  m.add(hit);
+  return m;
+}
+
+// Blue shield token shown next to the HP candles.
+export function makeShieldToken() {
+  return group(
+    put(cyl(0.03, 0.03, 0.012, 8, lam(0x3a6ab0, { emissive: 0x10305a })), 0, 0.006, 0),
+    put(cyl(0.012, 0.012, 0.016, 6, lam(0xc8d4e0)), 0, 0.008, 0),
+  );
+}
+
+// One handcuff ring; table.js snaps these around a player's wrists.
+export function makeCuffRing() {
+  const m = new THREE.Mesh(new THREE.TorusGeometry(0.068, 0.017, 5, 12), lam(0xd0d6dc, { emissive: 0x3a3e44 }));
+  m.castShadow = true;
+  return m;
+}
+
 export function makeLabel(text, { color = '#f4f0e6', bg = 'rgba(0,0,0,0.75)', w = 64, h = 24, scale = 0.16 } = {}) {
   const tex = canvasTex(w, h, (g) => {
     g.fillStyle = bg;
@@ -475,14 +525,26 @@ export function makeItem(id) {
   const chrome = lam(0xa8aeb4), black = lam(0x1a1a1a);
   switch (id) {
     case 'stethoscope': {
-      const tube = torus(0.055, 0.008, 4, 12, Math.PI * 1.5, lam(0x202020));
+      // rubber tube from the chest piece to the Y junction
+      const tube = torus(0.042, 0.007, 4, 12, Math.PI, lam(0x2a2a2a));
       tube.rotation.x = Math.PI / 2;
-      tube.position.y = 0.01;
+      tube.position.set(0.03, 0.008, 0);
       g.add(tube);
-      g.add(put(cyl(0.028, 0.028, 0.014, 9, chrome), 0.055, 0.008, 0));
-      g.add(put(cyl(0.02, 0.02, 0.006, 9, lam(0x222222)), 0.055, 0.017, 0));
-      g.add(put(sph(0.01, 5, 4, black), 0, 0.012, -0.06));
-      g.add(put(sph(0.01, 5, 4, black), -0.05, 0.012, -0.03));
+      // chest piece (diaphragm)
+      g.add(put(cyl(0.026, 0.026, 0.012, 10, chrome), 0.072, 0.007, 0));
+      g.add(put(cyl(0.019, 0.019, 0.005, 10, lam(0x1c1c1c)), 0.072, 0.015, 0));
+      g.add(put(cyl(0.006, 0.006, 0.02, 5, chrome), 0.072, 0.008, -0.018, Math.PI / 2, 0, 0));
+      // Y junction and the two metal ear tubes with ear tips
+      g.add(put(sph(0.01, 6, 5, chrome), -0.012, 0.008, 0));
+      for (const z of [-1, 1]) {
+        const tx = -0.095, tz = z * 0.05;
+        const len = Math.hypot(tx + 0.012, tz);
+        const arm = put(cyl(0.0045, 0.0045, len, 5, chrome), (tx - 0.012) / 2, 0.008, tz / 2, 0, 0, Math.PI / 2);
+        arm.rotation.set(0, Math.atan2(tz, -(tx + 0.012)) , Math.PI / 2);
+        g.add(arm);
+        g.add(put(sph(0.011, 6, 5, black), tx, 0.009, tz)); // ear tip
+      }
+      g.add(put(box(0.005, 0.005, 0.07, chrome), -0.05, 0.008, 0)); // tension spring
       break;
     }
     case 'prybar': {
@@ -492,21 +554,31 @@ export function makeItem(id) {
       g.add(put(box(0.03, 0.012, 0.024, chrome), -0.115, 0.01, 0));
       break;
     }
-    case 'hollow': {
-      const brass = lam(0xc9a13a), copper = lam(0xb05a2a);
-      for (const x of [-0.025, 0.025]) {
-        g.add(put(cyl(0.017, 0.017, 0.06, 8, brass), x, 0.03, 0));
-        g.add(put(cone(0.017, 0.035, 8, copper), x, 0.077, 0));
-        g.add(put(cyl(0.007, 0.007, 0.004, 6, black), x, 0.093, 0));
-      }
+    case 'saw': {
+      const steel = lam(0xb4b9be), wood = lam(0x7a4a22);
+      const blade = mesh(new THREE.BoxGeometry(0.17, 0.004, 0.05), steel);
+      blade.position.set(0.02, 0.004, 0);
+      blade.scale.set(1, 1, 1);
+      g.add(blade);
+      g.add(put(box(0.13, 0.004, 0.02, steel), 0.035, 0.004, 0.028)); // taper toward the tip
+      for (let k = 0; k < 10; k++) g.add(put(cone(0.005, 0.01, 3, steel), -0.055 + k * 0.016, 0.004, -0.029, -Math.PI / 2, 0, 0));
+      g.add(put(box(0.05, 0.022, 0.06, wood), -0.085, 0.011, 0.004)); // handle
+      g.add(put(box(0.03, 0.024, 0.026, lam(0x1a1208)), -0.085, 0.012, 0.004)); // grip hole
       break;
     }
     case 'bandage': {
-      g.add(put(cyl(0.04, 0.04, 0.055, 9, lam(0xe8e4d8)), 0, 0.0275, 0));
-      g.add(put(cyl(0.015, 0.015, 0.057, 6, lam(0x9a8a6a)), 0, 0.0275, 0));
-      g.add(put(box(0.05, 0.004, 0.045, lam(0xe8e4d8)), 0.04, 0.003, 0.02, 0, 0.4, 0));
-      g.add(put(box(0.022, 0.006, 0.006, lam(0xc02020)), 0, 0.058, 0));
-      g.add(put(box(0.006, 0.006, 0.022, lam(0xc02020)), 0, 0.058, 0));
+      const tan = lam(0xd9a875), pad = lam(0xf4eee2);
+      for (const [rot, y] of [[0.7, 0.003], [-0.7, 0.008]]) {
+        const strip = new THREE.Group();
+        strip.add(put(box(0.15, 0.004, 0.038, tan), 0, 0, 0));
+        strip.add(put(cyl(0.019, 0.019, 0.004, 8, tan), 0.075, 0, 0));
+        strip.add(put(cyl(0.019, 0.019, 0.004, 8, tan), -0.075, 0, 0));
+        strip.add(put(box(0.05, 0.006, 0.028, pad), 0, 0.001, 0));
+        for (const x of [-0.05, -0.035, 0.035, 0.05]) strip.add(put(box(0.004, 0.005, 0.004, lam(0xa87a50)), x, 0.001, 0.008));
+        strip.position.y = y;
+        strip.rotation.y = rot;
+        g.add(strip);
+      }
       break;
     }
     case 'doll': {
@@ -636,6 +708,92 @@ export function makeItem(id) {
       p.rotation.x = -1.2;
       p.position.y = 0.02;
       g.add(p);
+      break;
+    }
+    case 'medkit': {
+      const white = lam(0xece6da, { emissive: 0x302820, emissiveIntensity: 0.4 }), red = lam(0xc01c1c);
+      g.add(put(box(0.12, 0.07, 0.085, white), 0, 0.035, 0));
+      g.add(put(box(0.122, 0.008, 0.087, lam(0x9a9286)), 0, 0.05, 0)); // lid seam
+      g.add(put(box(0.05, 0.006, 0.016, red), 0, 0.072, 0));
+      g.add(put(box(0.016, 0.006, 0.05, red), 0, 0.072, 0));
+      g.add(put(box(0.04, 0.012, 0.01, lam(0x333333)), 0, 0.078, -0.03)); // handle
+      g.userData.rare = true;
+      break;
+    }
+    case 'hack': {
+      g.add(put(box(0.09, 0.022, 0.06, lam(0x26282a)), 0, 0.011, 0));
+      g.add(put(box(0.05, 0.004, 0.03, basic(0x39ff6a)), -0.01, 0.024, 0.004));
+      for (let k = 0; k < 3; k++) g.add(put(box(0.04 - k * 0.01, 0.003, 0.003, basic(0x0a3a14)), -0.012, 0.0265, -0.004 + k * 0.007));
+      g.add(put(cyl(0.003, 0.003, 0.06, 4, black), 0.035, 0.05, -0.02));
+      g.add(put(sph(0.006, 5, 4, basic(0xff3030)), 0.035, 0.082, -0.02));
+      g.add(put(box(0.012, 0.012, 0.012, lam(0xc9a13a)), 0.03, 0.026, 0.02)); // button
+      break;
+    }
+    case 'trash': case 'stinktrash': {
+      const stink = id === 'stinktrash';
+      const can = lam(stink ? 0x4f5a2e : 0x8e949a);
+      g.add(put(cyl(0.045, 0.036, 0.1, 10, can), 0, 0.05, 0));
+      for (const y of [0.02, 0.05, 0.08]) g.add(put(cyl(0.047, 0.047, 0.005, 10, lam(stink ? 0x3a4220 : 0x6e747a)), 0, y, 0));
+      const lid = new THREE.Group();
+      lid.add(put(cyl(0.05, 0.05, 0.008, 10, can), 0, 0, 0));
+      lid.add(put(box(0.03, 0.01, 0.008, lam(0x555555)), 0, 0.009, 0));
+      lid.position.set(stink ? 0.01 : 0, 0.104, 0);
+      if (stink) lid.rotation.z = 0.4;
+      g.add(lid);
+      if (stink) {
+        g.add(put(box(0.05, 0.004, 0.01, lam(0xd8d0b8)), -0.005, 0.11, 0.015, 0, 0.3, 0.6)); // fish bone
+        const fumes = basic(0x9ad040, { transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide });
+        for (let k = 0; k < 3; k++) {
+          const f = new THREE.Mesh(new THREE.TorusGeometry(0.02, 0.003, 3, 8, Math.PI), fumes);
+          f.position.set(-0.025 + k * 0.025, 0.14 + k * 0.012, 0);
+          f.rotation.z = k % 2 ? Math.PI : 0;
+          g.add(f);
+        }
+        for (let k = 0; k < 4; k++) g.add(put(box(0.006, 0.006, 0.006, black), -0.03 + k * 0.02, 0.16 + (k % 2) * 0.02, 0.01 * k - 0.015));
+      }
+      break;
+    }
+    case 'shield': {
+      const sh = new THREE.Group();
+      sh.add(put(cyl(0.06, 0.06, 0.012, 12, lam(0x3a6ab0)), 0, 0, 0));
+      sh.add(put(torus(0.06, 0.007, 4, 14, Math.PI * 2, lam(0xb8bec4)), 0, 0, 0, Math.PI / 2, 0, 0));
+      sh.add(put(sph(0.016, 6, 5, lam(0xc8d4e0)), 0, 0.008, 0));
+      sh.add(put(box(0.008, 0.004, 0.1, lam(0xb8bec4)), 0, 0.007, 0));
+      sh.rotation.x = -1.1;
+      sh.position.y = 0.055;
+      g.add(sh);
+      g.add(put(box(0.03, 0.01, 0.02, lam(0x5a3a1e)), 0, 0.005, 0.03));
+      break;
+    }
+    case 'wings': {
+      const feather = lam(0xf6f2ea, { emissive: 0x6a6450, emissiveIntensity: 0.5 });
+      for (const s2 of [-1, 1]) {
+        const w = new THREE.Group();
+        for (let k = 0; k < 4; k++) w.add(put(box(0.07 - k * 0.012, 0.004, 0.018), s2 * (0.035 + k * 0.004), 0.02 + k * 0.016, -k * 0.004, 0, 0, s2 * (0.5 + k * 0.18)));
+        w.children.forEach((c) => { c.material = feather; });
+        g.add(w);
+      }
+      g.add(put(torus(0.028, 0.004, 4, 14, Math.PI * 2, lam(0xe8c040, { emissive: 0x806010 })), 0, 0.1, 0, Math.PI / 2, 0, 0));
+      g.userData.rare = true;
+      break;
+    }
+    case 'handheld': {
+      // "Pocket Duo": an original clamshell with two screens
+      const shell = lam(0x2f7f86), dark = lam(0x14181a);
+      g.add(put(box(0.1, 0.012, 0.07, shell), 0, 0.006, 0.0));
+      g.add(put(box(0.05, 0.002, 0.036, basic(0x9ad8d0)), 0, 0.013, 0.004));
+      g.add(put(box(0.014, 0.004, 0.004, dark), -0.038, 0.013, 0.004));
+      g.add(put(box(0.004, 0.004, 0.014, dark), -0.038, 0.013, 0.004));
+      g.add(put(cyl(0.005, 0.005, 0.004, 6, lam(0xd84a3a)), 0.036, 0.013, 0.0));
+      g.add(put(cyl(0.005, 0.005, 0.004, 6, lam(0xe0c040)), 0.042, 0.013, 0.01));
+      // lid, hinged at the back edge, standing open and leaning back a little
+      const top = new THREE.Group();
+      top.add(put(box(0.1, 0.07, 0.01, shell), 0, 0.035, 0));
+      top.add(put(box(0.074, 0.048, 0.002, basic(0xffe9a0)), 0, 0.037, 0.006));
+      top.position.set(0, 0.012, -0.035);
+      top.rotation.x = -0.3;
+      g.add(top);
+      g.userData.rare = true;
       break;
     }
     default:

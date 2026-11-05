@@ -77,18 +77,18 @@ function distCurve(k) {
 
 const S = {
   blast() {
+    // about half as loud as before: still a punch, no longer a jump scare
     const t = now();
     const ws = ctx.createWaveShaper();
-    ws.curve = distCurve(30);
+    ws.curve = distCurve(18);
     const g = ctx.createGain();
-    g.gain.value = 0.9;
+    g.gain.value = 0.42;
     ws.connect(g).connect(sfxBus);
-    noise(t, 1.4, { f0: 9000, f1: 160, gain: 1.0, out: ws });
-    noise(t, 0.25, { type: 'highpass', f0: 3000, f1: 1500, gain: 0.6 });
-    tone(t, 0.6, { f0: 120, f1: 32, gain: 1.0, type: 'sine' });
-    tone(t, 0.35, { f0: 70, f1: 30, gain: 0.8, type: 'triangle' });
-    // room tail
-    noise(t + 0.08, 1.6, { f0: 900, f1: 120, gain: 0.18 });
+    noise(t, 1.2, { f0: 7000, f1: 160, gain: 0.8, out: ws });
+    noise(t, 0.22, { type: 'highpass', f0: 3000, f1: 1500, gain: 0.25 });
+    tone(t, 0.55, { f0: 120, f1: 32, gain: 0.5, type: 'sine' });
+    tone(t, 0.3, { f0: 70, f1: 30, gain: 0.35, type: 'triangle' });
+    noise(t + 0.08, 1.4, { f0: 900, f1: 120, gain: 0.09 });
   },
   click() {
     const t = now();
@@ -214,6 +214,43 @@ const S = {
     tone(t, 0.08, { type: 'square', f0: 1200, gain: 0.05 });
     tone(t + 0.07, 0.2, { type: 'square', f0: 1800, gain: 0.05 });
   },
+  powerup() {
+    const t = now();
+    [392, 494, 587, 784, 988, 1175].forEach((f, i) => tone(t + i * 0.07, 0.12, { type: 'square', f0: f, gain: 0.06 }));
+    tone(t + 0.45, 0.4, { type: 'triangle', f0: 1568, f1: 1760, gain: 0.07 });
+  },
+  saw() {
+    const t = now();
+    noise(t, 0.09, { type: 'bandpass', f0: 2600 + Math.random() * 600, f1: 1800, q: 4, gain: 0.35, attack: 0.02 });
+  },
+  clang() {
+    const t = now();
+    [523, 1310, 2093].forEach((f) => tone(t, 0.5, { type: 'triangle', f0: f, f1: f * 0.98, gain: 0.07 }));
+    noise(t, 0.05, { type: 'highpass', f0: 3000, gain: 0.25 });
+  },
+  hack() {
+    const t = now();
+    for (let i = 0; i < 8; i++) tone(t + i * 0.05, 0.04, { type: 'square', f0: 400 + Math.random() * 1600, gain: 0.04 });
+  },
+  trash() {
+    const t = now();
+    noise(t, 0.25, { type: 'bandpass', f0: 600, f1: 200, q: 1.5, gain: 0.45 });
+    tone(t, 0.15, { type: 'square', f0: 180, f1: 90, gain: 0.08 });
+  },
+  stink() {
+    const t = now();
+    tone(t, 0.7, { type: 'sawtooth', f0: 90, f1: 60, gain: 0.08 });
+    noise(t, 0.8, { f0: 400, f1: 150, gain: 0.25, attack: 0.15 });
+  },
+  boot() {
+    const t = now();
+    tone(t, 0.12, { type: 'square', f0: 660, gain: 0.05 });
+    tone(t + 0.13, 0.3, { type: 'square', f0: 990, gain: 0.05 });
+  },
+  blip() { tone(now(), 0.04, { type: 'square', f0: 880, gain: 0.035 }); },
+  good() { const t = now(); tone(t, 0.08, { type: 'square', f0: 784, gain: 0.05 }); tone(t + 0.08, 0.12, { type: 'square', f0: 1175, gain: 0.05 }); },
+  bad() { const t = now(); tone(t, 0.18, { type: 'square', f0: 220, f1: 150, gain: 0.06 }); },
+  tick() { tone(now(), 0.02, { type: 'square', f0: 1400, gain: 0.03 }); },
   pop() {
     const t = now();
     tone(t, 0.12, { type: 'sine', f0: 300, f1: 900, gain: 0.15 });

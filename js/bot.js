@@ -10,19 +10,20 @@
 //  pro   — best move plus strategy: cuffs before risky shots, switch tricks,
 //          denying others' info with dice, item theft, smart target choice.
 
-import { ITEMS, MAX_SHELLS, itemProblem, freeSlots } from './engine.js';
+import { ITEMS, MAX_SHELLS, MINIGAME_IDS, itemProblem, freeSlots } from './engine.js';
 
-export const DIFFICULTIES = { easy: 'Easy', hard: 'Hard', xhard: 'Xtra Hard', pro: 'Pro' };
+export const DIFFICULTIES = ['easy', 'hard', 'xhard', 'pro'];
 
 const BASE_VALUE = {
-  stethoscope: 6, hollow: 5, cuffs: 5, insurance: 6, goldglove: 5, double: 4, bandage: 4,
-  doll: 4, mirror: 3, glove: 3, prybar: 4, phone: 4, switch: 4, syringe: 2, dice: 2, fake: 2, rotator: 1,
+  stethoscope: 6, saw: 4, cuffs: 5, insurance: 6, goldglove: 5, double: 4, bandage: 4,
+  doll: 5, mirror: 3, glove: 3, prybar: 4, phone: 4, switch: 4, syringe: 2, dice: 2, fake: 2, rotator: 1,
+  medkit: 6, hack: 4, trash: 4, stinktrash: 2, shield: 5, wings: 7, handheld: 3,
 };
 
 export function itemValue(game, p, id) {
   const me = game.players[p];
   let v = BASE_VALUE[id] ?? 2;
-  if (id === 'bandage' && me.hp < me.maxHp) v += 2;
+  if ((id === 'bandage' || id === 'medkit') && me.hp < me.maxHp) v += 2;
   if (id === 'insurance' && me.hp <= 2) v += 3;
   if (id === 'rotator' && game.alive().length <= 2) v = 0;
   if (id === 'syringe' && me.hp <= 2) v -= 1;
@@ -97,8 +98,12 @@ function turnAction(game, p, level, rng) {
     return s >= 0 ? { type: 'item', slot: s, target, pick } : null;
   };
   const shoot = (t) => ({ type: 'shoot', target: t });
-  const noDoll = opps.filter((q) => !q.doll);
-  const dmgNow = (me.hollow ? 2 : 1);
+  // with our own doll up, a target's doll can't bounce the shot (it gets parried)
+  const noDoll = me.doll ? opps : opps.filter((q) => !q.doll);
+  const dmgNow = (me.saw ? 2 : 1);
+  const randomGame = () => pickRandom(MINIGAME_IDS, rng);
+  const minOppHp = Math.min(...opps.map((q) => q.hp));
+  const maxOppHp = Math.max(...opps.map((q) => q.hp));
 
   const weakest = (list) => {
     const arr = list.slice().sort((a, b) => {
@@ -142,9 +147,16 @@ function turnAction(game, p, level, rng) {
 
   // ---------- HARD ----------
   if (level === 'hard') {
+    if (me.hp <= me.maxHp - 2) { const a = use('medkit'); if (a) return a; }
     if (me.hp < me.maxHp) { const a = use('bandage'); if (a) return a; }
     if (me.hp <= 2) { const a = use('insurance'); if (a) return a; }
+    if (rng() < 0.5) { const a = use('shield'); if (a) return a; }
     if (me.hp >= 3 && me.hp < me.maxHp && rng() < 0.5) { const a = use('syringe'); if (a) return a; }
+    if (rng() < 0.2 && me.hp > minOppHp) { const a = use('handheld', undefined, randomGame()); if (a) return a; }
+    if (rng() < 0.25) {
+      const t = pickRandom(opps.filter((q) => !q.hacked && countItems(q) > 0), rng);
+      if (t) { const a = use('hack', t.idx); if (a) return a; }
+    }
     if (!A.certain && rng() < 0.6) { const a = use('stethoscope'); if (a) return a; }
     if (!A.certain && rng() < 0.3) { const a = use('phone'); if (a) return a; }
     if (rng() < 0.4) { const a = use('doll'); if (a) return a; }
@@ -158,12 +170,14 @@ function turnAction(game, p, level, rng) {
         const t = pickRandom(withItems, rng);
         const a = use('glove', t.idx); if (a) return a;
         const picks = t.slots.map((s, i) => (s ? i : -1)).filter((i) => i >= 0);
-        const g = use('goldglove', t.idx, pickRandom(picks, rng)); if (g) return g;
+        const pk = pickRandom(picks, rng);
+        const g = use('goldglove', t.idx, pk); if (g) return g;
+        const tr = use('trash', t.idx, pk); if (tr) return tr;
       }
     }
     const randT = () => (noDoll.length ? pickRandom(noDoll, rng) : pickRandom(opps, rng)).idx;
     if (A.p === 1) {
-      if (rng() < 0.5) { const a = use('hollow'); if (a) return a; }
+      if (rng() < 0.5) { const a = use('saw'); if (a) return a; }
       if (!noDoll.length) { const a = use('prybar'); if (a) return a; }
       return shoot(randT());
     }
@@ -188,10 +202,20 @@ function turnAction(game, p, level, rng) {
     const mirrorT = opps.map((q) => ({ q, v: q.slots.reduce((s, x) => s + (x ? itemValue(game, p, x.id) : 0), 0) }))
       .sort((a, b) => b.v - a.v)[0];
     if (mirrorT && mirrorT.v > mineVal + (pro ? 3 : 5)) { const a = use('mirror', mirrorT.q.idx); if (a) return a; }
+    if (steal && steal.value >= 5) { const a = use('trash', steal.target, steal.slot); if (a) return a; }
+    const oppItems = opps.reduce((s2, q) => s2 + countItems(q), 0);
+    if (oppItems >= 3 && oppItems >= 2 * (countItems(me) - 1)) { const a = use('stinktrash'); if (a) return a; }
+    const busy = opps.filter((q) => !q.hacked && countItems(q) >= 2).sort((a, b) => countItems(b) - countItems(a));
+    const hackT = pro ? (busy.find((q) => q.idx === game.nextAlive(p)) || null) : busy[0];
+    if (hackT) { const a = use('hack', hackT.idx); if (a) return a; }
   }
 
   // Survival.
+  if (me.hp <= me.maxHp - 2 || me.hp === 1) { const a = use('medkit'); if (a) return a; }
   if (me.hp < me.maxHp) { const a = use('bandage'); if (a) return a; }
+  { const a = use('shield'); if (a) return a; }
+  // The handheld hurts the bottom half: worth it when we're sturdier than the field.
+  if (opps.length && ((pro && minOppHp === 1 && me.hp >= 2) || me.hp > maxOppHp)) { const a = use('handheld', undefined, randomGame()); if (a) return a; }
   if (me.hp <= 2) { const a = use('insurance'); if (a) return a; }
   if ((me.hp >= 3 || (pro && me.insured)) && me.maxHp - me.hp >= (pro ? 3 : 2)) { const a = use('syringe'); if (a) return a; }
 
@@ -213,11 +237,12 @@ function turnAction(game, p, level, rng) {
 
   if (A2.p === 1) {
     if (!noDoll.length) {
+      { const d = use('doll'); if (d) return d; } // parry their doll
       if (pro) { const s = use('switch'); if (s) return s; }
       const pr = use('prybar'); if (pr) return pr;
       return shoot(pick(opps).idx);
     }
-    { const a = use('hollow'); if (a) return a; }
+    { const a = use('saw'); if (a) return a; }
     if (n >= 2 && A2.pAt(1) >= 0.5) { const a = use('double'); if (a) return a; }
     if (pro && n > 1 + (me.double ? 1 : 0) && !players[nextP].cuffed) { const a = use('cuffs', nextP); if (a) return a; }
     return shoot(pick(noDoll).idx);
@@ -236,10 +261,10 @@ function turnAction(game, p, level, rng) {
   }
 
   // p >= 0.5: shoot someone else.
-  if (!noDoll.length) return shoot(p);
   { const a = use('doll'); if (a) return a; }
+  if (!noDoll.length) return shoot(p);
   if (pro && n > 1 && !players[nextP].cuffed) { const a = use('cuffs', nextP); if (a) return a; }
-  { const a = use('hollow'); if (a) return a; }
+  if (A2.p >= (pro ? 0.66 : 0.6) || (pro && A2.p >= 0.5 && proTarget(noDoll).hp === 2)) { const a = use('saw'); if (a) return a; }
   if (n >= 2 && A2.p >= 0.6 && A2.pAt(1) >= 0.6) { const a = use('double'); if (a) return a; }
   if (pro && opps.length >= 2) {
     const prevP = game.nextAlive(p, -game.dir);
@@ -269,7 +294,7 @@ function bestSteal(game, p, A) {
       if (!s) return;
       let v = itemValue(game, p, s.id);
       if (s.id === 'stethoscope' && !A.certain) v += 2;
-      if (s.id === 'hollow' && A.p >= 0.5) v += 1;
+      if (s.id === 'saw' && A.p >= 0.5) v += 1;
       if (!best || v > best.value) best = { target: q.idx, slot: i, value: v };
     });
   });
@@ -286,10 +311,11 @@ function randomItemActions(game, p, rng) {
     if (!s) return;
     const def = ITEMS[s.id];
     if (!def.target) {
-      if (!itemProblem(game.players, n, p, s.id)) out.push({ type: 'item', slot });
+      const pick = s.id === 'handheld' ? pickRandom(MINIGAME_IDS, rng) : undefined;
+      if (!itemProblem(game.players, n, p, s.id, undefined, pick)) out.push({ type: 'item', slot, pick });
       return;
     }
-    const t = pickRandom(opps, rng);
+    const t = pickRandom(def.target === 'dead' ? game.players.filter((q) => !q.alive) : opps, rng);
     if (!t) return;
     let pick;
     if (def.target === 'item') {

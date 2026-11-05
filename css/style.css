@@ -166,11 +166,6 @@ body.choosing #caption { bottom: calc(var(--abh, 150px) + 10px); }
 .itembtn.rare span { color: #e9c96a; }
 .shootbtn { background: #4a1c12; border-color: var(--rust); font-size: 26px; padding: 8px 26px; letter-spacing: 2px; }
 
-#modal { position: fixed; inset: 0; z-index: 25; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); padding: 16px; }
-#modal .panel { max-width: 440px; }
-.choice { display: flex; justify-content: space-between; align-items: center; width: 100%; margin: 5px 0; text-align: left; gap: 10px; }
-.choice small { color: var(--dim); font-size: 17px; }
-.choice.self { border-color: #5a5a3a; }
 
 #score-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 19px; }
 #score-table th { color: var(--dim); font-weight: normal; text-align: left; border-bottom: 1px solid var(--edge); padding: 3px 4px; }
@@ -211,3 +206,89 @@ body.choosing #caption { bottom: calc(var(--abh, 150px) + 10px); }
   #caption { bottom: 30%; }
   .itembtn img { width: 30px; height: 30px; }
 }
+
+/* ---------- last life: red fog creeping in from the edges ---------- */
+#fx-lastlife {
+  position: fixed; inset: 0; pointer-events: none; opacity: 0; transition: opacity 1.2s; z-index: 4;
+  background:
+    radial-gradient(ellipse at center, rgba(90,0,0,0) 38%, rgba(120,0,0,0.38) 70%, rgba(150,0,0,0.78) 100%);
+  filter: blur(6px);
+}
+body.lastlife #fx-lastlife { opacity: 1; animation: lastlife 2.4s ease-in-out infinite; }
+@keyframes lastlife {
+  0%, 100% { transform: scale(1.04); filter: blur(6px) brightness(0.9); }
+  50% { transform: scale(1); filter: blur(10px) brightness(1.25); }
+}
+.plate .hp .sh { color: #6fa8ff; margin-left: 3px; }
+
+/* ---------- Pocket Duo handheld ---------- */
+#duo {
+  position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.55); padding: 10px; touch-action: none;
+}
+.duo-body {
+  --sw: min(560px, 62vw, calc((100dvh - 150px) / 1.375)); /* screen width; both screens stack */
+  display: flex; flex-direction: column; align-items: center; gap: 0;
+  animation: duo-in 0.35s cubic-bezier(.2,1.4,.4,1);
+}
+@keyframes duo-in { from { transform: translateY(40px) scale(0.9); opacity: 0; } }
+.duo-lid, .duo-base {
+  background: linear-gradient(#3a9aa2, #24686e); border: 3px solid #123a3e; border-radius: 22px;
+  box-shadow: inset 0 3px 0 rgba(255,255,255,0.25), inset 0 -4px 0 rgba(0,0,0,0.25), 0 12px 30px rgba(0,0,0,0.6);
+}
+.duo-lid { width: calc(var(--sw) + 34px); padding: 10px 10px 4px; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px; text-align: center; }
+.duo-hinge { width: calc(var(--sw) * 0.9); height: 12px; background: linear-gradient(#1c5257, #2a7a80, #1c5257); border-left: 3px solid #123a3e; border-right: 3px solid #123a3e; }
+.duo-base {
+  display: grid; grid-template-columns: calc(var(--sw) * 0.36) var(--sw) calc(var(--sw) * 0.36); align-items: center; gap: 12px; padding: 10px 14px;
+  border-top-left-radius: 8px; border-top-right-radius: 8px;
+}
+.duo-screen {
+  display: block; width: var(--sw); height: auto; background: #000; border: 7px solid #101415; border-radius: 6px; box-sizing: content-box;
+  image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none;
+}
+.duo-brand { color: #cdeeea; font-size: 14px; letter-spacing: 4px; margin-top: 2px; opacity: 0.8; }
+.duo-dpad { position: relative; width: 100%; aspect-ratio: 1; max-width: 120px; justify-self: center; touch-action: none; cursor: pointer; }
+.duo-dpad span, .duo-dpad i { position: absolute; background: #1a2224; border: 2px solid #0a0f10; }
+.duo-dpad .u, .duo-dpad .d { left: 34%; width: 32%; height: 36%; }
+.duo-dpad .l, .duo-dpad .r { top: 34%; height: 32%; width: 36%; }
+.duo-dpad .u { top: 0; border-radius: 6px 6px 0 0; } .duo-dpad .d { bottom: 0; border-radius: 0 0 6px 6px; }
+.duo-dpad .l { left: 0; border-radius: 6px 0 0 6px; } .duo-dpad .r { right: 0; border-radius: 0 6px 6px 0; }
+.duo-dpad i { left: 34%; top: 34%; width: 32%; height: 32%; border: none; }
+.duo-dpad[data-dir="up"] .u, .duo-dpad[data-dir="down"] .d, .duo-dpad[data-dir="left"] .l, .duo-dpad[data-dir="right"] .r { background: #3a4a4e; }
+.duo-btns { position: relative; width: 100%; max-width: 120px; aspect-ratio: 1; justify-self: center; }
+.duo-btns button {
+  position: absolute; width: 48%; aspect-ratio: 1; border-radius: 50%; padding: 0; font-size: 22px; color: #fff;
+  border: 3px solid rgba(0,0,0,0.45); box-shadow: inset 0 -4px 0 rgba(0,0,0,0.3); touch-action: none;
+}
+.duo-a { right: 0; top: 10%; background: #d84a3a; }
+.duo-b { left: 0; bottom: 10%; background: #d8b040; color: #3a2a00 !important; }
+.duo-btns button.on, .duo-btns button:active { transform: translateY(2px); box-shadow: none; filter: brightness(1.2); }
+@media (max-aspect-ratio: 3/4) {
+  .duo-body { --sw: min(90vw, 520px, calc((100dvh - 300px) / 1.375)); }
+  .duo-base { grid-template-columns: 1fr 1fr; grid-template-areas: "scr scr" "pad btn"; width: calc(var(--sw) + 34px); }
+  .duo-base .bottom { grid-area: scr; }
+  .duo-dpad { grid-area: pad; max-width: 130px; }
+  .duo-btns { grid-area: btn; max-width: 130px; }
+}
+body.duo-open #caption, body.duo-open #tooltip, body.duo-open #tags { display: none; }
+
+/* ---------- labels pinned to the 3D table ---------- */
+#tags { position: fixed; inset: 0; pointer-events: none; z-index: 6; overflow: hidden; }
+.tag3d {
+  position: absolute; left: 0; top: 0; white-space: nowrap; pointer-events: none;
+  font-size: 22px; line-height: 1; color: #fff; background: rgba(8,8,6,0.85); border: 2px solid #d9b04a;
+  padding: 4px 10px 5px; text-shadow: 1px 1px 0 #000;
+}
+.tag3d.click { pointer-events: auto; cursor: pointer; }
+.tag3d em { font-style: normal; color: #ffb347; font-size: 16px; letter-spacing: 1px; }
+.tag3d em b { color: #6fa8ff; font-weight: normal; }
+.tag3d.self { border-color: #88ccff; color: #cfe8ff; }
+.tag3d.bad { border-color: #555; color: #888; }
+.tag3d.sel { border-color: #ff4030; background: #4a1c12; transform-origin: center; }
+.tag3d.price {
+  font-family: Arial, Helvetica, sans-serif; font-weight: bold; font-size: 22px; padding: 3px 9px 3px 6px;
+  background: #0d0b07; border: 3px solid #d9b04a; display: flex; align-items: center; gap: 5px;
+}
+.tag3d.price .chip { width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle, #7a5a12 40%, #c9a13a 42%); display: inline-block; }
+body.targeting #caption { bottom: auto; top: calc(12% + 40px); }
+@media (max-width: 560px) { .tag3d { font-size: 18px; } .tag3d.price { font-size: 18px; } }

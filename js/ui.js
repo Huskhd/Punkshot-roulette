@@ -1,18 +1,21 @@
 // Muckshot — HTML overlay: captions, HUD, action bar, pickers and screens.
+// Targets (who to shoot, who to use an item on, which of their items) are picked
+// by tapping them at the table; the bar at the bottom only confirms or cancels.
 import { ITEMS, ITEM_IDS, itemProblem, freeSlots } from './engine.js';
-import { CHARACTERS } from './models.js';
 import { sfx } from './audio.js';
+import { t, prob, itemName, itemDesc, charName } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const OK_PROBS = new Set(['NEED_TARGET', 'NEED_PICK']);
 
 export class UI {
   constructor() {
     this.thumbs = {};
     this.req = null;
     this.capTimer = 0;
-    this.onPickHook = null;
-    this.lastHud = null;
+    this.view = null; // TableView, set by main
+    this.duo = null;  // handheld console, set by main
   }
 
   // ---------- captions & effects ----------
@@ -48,15 +51,18 @@ export class UI {
     clearTimeout(this.toastT);
     this.toastT = setTimeout(() => el.classList.add('hidden'), ms);
   }
+  setLastLife(on) {
+    document.body.classList.toggle('lastlife', !!on);
+    if (this.view) this.view.lowHp = !!on;
+  }
 
   // ---------- screens ----------
-  show(id) {
-    document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('hidden', s.id !== id));
-  }
+  show(id) { document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('hidden', s.id !== id)); }
   hideScreens() { document.querySelectorAll('.screen').forEach((s) => s.classList.add('hidden')); }
-  overlay(id, on) { $(id).classList.toggle('hidden', !on); }
-  showHud(on) { $('hud').classList.toggle('hidden', !on); if (!on) { this.cancelRequest(); this.clearCaption(); } }
-
+  showHud(on) {
+    $('hud').classList.toggle('hidden', !on);
+    if (!on) { this.cancelRequest(); this.clearCaption(); this.setLastLife(false); }
+  }
   passScreen(name) {
     return new Promise((res) => {
       $('pass-name').textContent = name;
@@ -70,42 +76,45 @@ export class UI {
     if (!s || !s.players) return;
     this.lastHud = { s, viewer };
     const turn = s.decision ? s.decision.player : s.turn;
-    const html = s.players.map((p, i) => {
+    $('plates').innerHTML = s.players.map((p, i) => {
       const hp = Array.from({ length: p.maxHp }, (_, k) => (k < p.hp ? '▲' : '<span class="off">▲</span>')).join('');
+      const shield = p.shield ? `<span class="sh">${'◆'.repeat(Math.min(p.shield, 6))}</span>` : '';
       const st = [];
-      if (p.doll) st.push(this.img('doll', 'Boodoo Doll'));
-      if (p.hollow) st.push(this.img('hollow', 'Hollow point loaded'));
-      if (p.insured) st.push(this.img('insurance', 'Insured'));
-      if (p.double) st.push(this.img('double', 'Double barrel'));
-      if (p.cuffed) st.push(this.img('cuffs', 'Cuffed'));
+      if (p.doll) st.push(this.img('doll', itemName('doll')));
+      if (p.saw) st.push(this.img('saw', itemName('saw')));
+      if (p.insured) st.push(this.img('insurance', itemName('insurance')));
+      if (p.double) st.push(this.img('double', itemName('double')));
+      if (p.cuffed) st.push(this.img('cuffs', itemName('cuffs')));
+      if (p.hacked || p.jammed) st.push(this.img('hack', itemName('hack')));
       const items = p.slots.filter(Boolean).length;
       const cls = ['plate', i === turn && !s.over ? 'turn' : '', !p.alive ? 'dead' : ''].join(' ');
       return `<div class="${cls}">
-        <div class="pn">${esc(p.name)}${i === viewer ? '<span class="you">YOU</span>' : ''}</div>
-        <div class="hp">${p.alive ? hp : '☠'}</div>
+        <div class="pn">${esc(p.name)}${i === viewer ? `<span class="you">${t('you')}</span>` : ''}</div>
+        <div class="hp">${p.alive ? hp + shield : '☠'}</div>
         <div class="st">${st.join('')}${items ? `<span class="cuff">${items}✋</span>` : ''}</div>
         ${s.itemMode === 'shop' ? `<div class="chips">${p.chips}¢</div>` : ''}
       </div>`;
     }).join('');
-    $('plates').innerHTML = html;
     const arrow = s.dir > 0 ? '↻' : '↺';
-    const shells = s.shellsLeft != null ? ` · ${s.shellsLeft} shell${s.shellsLeft === 1 ? '' : 's'}` : '';
+    const shells = s.shellsLeft != null ? ` · ${s.shellsLeft} ▮` : '';
     $('roundinfo').textContent = `R${s.round || 1}${shells} · ${arrow}`;
+    const me = viewer >= 0 ? s.players[viewer] : null;
+    this.setLastLife(me && me.alive && me.hp === 1 && !(me.shield > 0) && !s.over);
   }
   img(id, title) { return this.thumbs[id] ? `<img src="${this.thumbs[id]}" title="${esc(title)}" alt="">` : ''; }
 
   // ---------- item info ----------
-  describe(id) { const d = ITEMS[id]; return d ? `${d.name}: ${d.desc}` : ''; }
+  describe(id) { return `${itemName(id)}: ${itemDesc(id)}`; }
   tooltip(pick, x, y, snap) {
     const el = $('tooltip');
     let html = '';
     if (pick && (pick.kind === 'item' || pick.kind === 'tray')) {
       const id = this.idFor(pick, snap);
-      if (id) html = `<b>${esc(ITEMS[id].name)}</b><br>${esc(ITEMS[id].desc)}`;
-    } else if (pick && pick.kind === 'player' && snap) {
+      if (id) html = `<b>${esc(itemName(id))}</b><br>${esc(itemDesc(id))}`;
+    } else if (pick && (pick.kind === 'player' || pick.kind === 'target') && snap) {
       const p = snap.players[pick.idx];
-      if (p) html = `<b>${esc(p.name)}</b> — ${CHARACTERS[p.char % 4].name}<br>${p.hp}/${p.maxHp} HP · ${p.slots.filter(Boolean).length} items`;
-    } else if (pick && pick.kind === 'gun') html = this.req && this.req.kind === 'turn' ? '<b>The gun</b><br>Click to pick it up.' : '<b>The gun</b>';
+      if (p) html = `<b>${esc(p.name)}</b> — ${esc(charName(p.char))}<br>${esc(t('hpItems', { hp: p.hp, max: p.maxHp, n: p.slots.filter(Boolean).length }))}`;
+    } else if (pick && pick.kind === 'gun') html = `<b>${esc(t('gunTip'))}</b>${this.req && this.req.kind === 'turn' ? `<br>${esc(t('gunTipTurn'))}` : ''}`;
     if (!html) { el.classList.add('hidden'); return; }
     el.innerHTML = html;
     el.classList.remove('hidden');
@@ -116,7 +125,7 @@ export class UI {
   hideTooltip() { $('tooltip').classList.add('hidden'); }
   idFor(pick, snap) {
     if (!snap) return null;
-    if (pick.kind === 'tray') { const t = (snap.tray || []).find((x) => x.uid === pick.uid); return t && t.id; }
+    if (pick.kind === 'tray') { const x = (snap.tray || []).find((y) => y.uid === pick.uid); return x && x.id; }
     for (const p of snap.players) for (const s of p.slots) if (s && s.uid === pick.uid) return s.id;
     return null;
   }
@@ -126,19 +135,21 @@ export class UI {
   requestAction(snap, seat, who) {
     this.cancelRequest();
     return new Promise((resolve) => {
-      this.req = { snap, seat, resolve, kind: snap.decision.kind, sel: null, who };
+      this.req = { snap, seat, resolve, kind: snap.decision.kind, sel: null, who, tgt: null };
       document.body.classList.add('choosing');
       this.renderBar();
       const d = snap.decision;
-      if (d.kind === 'turn') this.say('Your move. Use items, or pick up the gun.', 4);
-      else if (d.kind === 'draft') this.say(`${snap.players[seat].name}, your pick.`, 3);
+      if (d.kind === 'turn') this.say(t('yourMove'), 4);
+      else if (d.kind === 'draft') this.say(t('yourPickCap', { n: snap.players[seat].name }), 3);
     });
   }
   cancelRequest() {
     if (!this.req) return;
     const r = this.req;
     this.req = null;
+    this.endTarget();
     this.closeBar();
+    if (this.duo && this.duo.mode === 'menu') this.duo.close();
     r.resolve(null);
   }
   finish(action) {
@@ -146,14 +157,23 @@ export class UI {
     if (!r) return;
     this.req = null;
     sfx('ui');
+    this.endTarget();
     this.closeBar();
     r.resolve(action);
   }
   closeBar() {
     $('actionbar').classList.add('hidden');
-    this.closeModal();
-    document.body.classList.remove('choosing');
+    document.body.classList.remove('choosing', 'targeting');
     this.hideTooltip();
+  }
+  measureBar() { document.documentElement.style.setProperty('--abh', `${$('actionbar').offsetHeight}px`); }
+  btn(label, cls, onClick, disabled) {
+    const b = document.createElement('button');
+    b.className = cls || '';
+    b.textContent = label;
+    b.disabled = !!disabled;
+    b.onclick = onClick;
+    return b;
   }
 
   renderBar() {
@@ -166,205 +186,218 @@ export class UI {
     btns.innerHTML = '';
     $('actionbar').classList.remove('hidden');
     const pre = r.who ? `${r.who.toUpperCase()} — ` : '';
+    document.body.classList.toggle('targeting', !!r.tgt);
+    if (r.tgt) { this.renderTargetBar(); this.measureBar(); return; }
     if (kind === 'turn') {
       const used = me.slots.map((s, i) => ({ s, i })).filter((x) => x.s);
-      head.textContent = used.length ? `${pre}YOUR ITEMS` : pre.replace(/ — $/, '');
+      head.textContent = used.length ? `${pre}${t('yourItems')}` : pre.replace(/ — $/, '');
       for (const { s, i } of used) {
-        const prob = itemProblem(snap.players, snap.shellsLeft, seat, s.id);
-        const bad = prob && prob !== 'NEED_TARGET' && prob !== 'NEED_PICK';
-        const b = this.itemButton(s.id, { sel: r.sel === i, bad });
+        const p = itemProblem(snap.players, snap.shellsLeft, seat, s.id);
+        const b = this.itemButton(s.id, { sel: r.sel === i, bad: p && !OK_PROBS.has(p) });
         b.onclick = () => this.selectSlot(i);
         items.appendChild(b);
       }
       if (r.sel != null && me.slots[r.sel]) {
         const id = me.slots[r.sel].id;
-        const use = document.createElement('button');
-        use.className = 'big accent';
-        use.textContent = `USE ${ITEMS[id].name.toUpperCase()}`;
-        use.onclick = () => this.useSelected();
-        const cancel = document.createElement('button');
-        cancel.textContent = 'BACK';
-        cancel.onclick = () => { r.sel = null; this.renderBar(); };
-        btns.append(cancel, use);
-      } else {
-        const sh = document.createElement('button');
-        sh.className = 'shootbtn';
-        sh.textContent = 'PICK UP THE GUN';
-        sh.onclick = () => this.shootModal();
-        btns.append(sh);
-      }
+        btns.append(this.btn(t('back'), '', () => { r.sel = null; this.renderBar(); }), this.btn(t('use', { item: itemName(id) }), 'big accent', () => this.useSelected()));
+      } else btns.append(this.btn(t('pickGun'), 'shootbtn', () => this.beginShoot()));
       this.measureBar();
       return;
     }
-    // tray decisions
     const free = freeSlots(me);
-    if (kind === 'take') head.textContent = `${pre}TAKE YOUR ITEMS — ${free} FREE SLOT${free === 1 ? '' : 'S'}`;
-    else if (kind === 'draft') head.textContent = `${pre}YOUR PICK — ${free} FREE SLOT${free === 1 ? '' : 'S'}`;
-    else head.textContent = `${pre}SHOP — ${me.chips} CHIPS · ${free} FREE SLOT${free === 1 ? '' : 'S'}`;
-    for (const t of snap.tray) {
-      const bad = kind === 'shop' && t.price > me.chips;
-      const b = this.itemButton(t.id, { sel: r.sel === t.uid, bad, price: kind === 'shop' ? t.price : null });
-      b.onclick = () => this.selectTray(t.uid);
+    if (kind === 'take') head.textContent = pre + t('takeItems', { free });
+    else if (kind === 'draft') head.textContent = pre + t('yourPick', { free });
+    else head.textContent = pre + t('shopHead', { chips: me.chips, free });
+    for (const x of snap.tray) {
+      const b = this.itemButton(x.id, { sel: r.sel === x.uid, bad: kind === 'shop' && x.price > me.chips, price: kind === 'shop' ? x.price : null });
+      b.onclick = () => this.selectTray(x.uid);
       items.appendChild(b);
     }
     if (r.sel != null) {
-      const t = snap.tray.find((x) => x.uid === r.sel);
-      if (t) {
-        const ok = document.createElement('button');
-        ok.className = 'big accent';
-        ok.textContent = kind === 'shop' ? `BUY ${ITEMS[t.id].name.toUpperCase()} (${t.price}¢)` : `TAKE ${ITEMS[t.id].name.toUpperCase()}`;
-        ok.disabled = kind === 'shop' && t.price > me.chips;
-        ok.onclick = () => this.confirmTray();
-        btns.append(ok);
+      const x = snap.tray.find((y) => y.uid === r.sel);
+      if (x) {
+        const label = kind === 'shop' ? t('buy', { item: itemName(x.id), price: x.price }) : t('take', { item: itemName(x.id) });
+        btns.append(this.btn(label, 'big accent', () => this.confirmTray(), kind === 'shop' && x.price > me.chips));
       }
     }
-    if (kind === 'take' || kind === 'shop') {
-      const done = document.createElement('button');
-      done.textContent = kind === 'take' ? 'LEAVE THE REST' : 'DONE SHOPPING';
-      done.onclick = () => this.finish({ type: 'done' });
-      btns.append(done);
-    }
-    if (kind === 'take') {
-      const all = document.createElement('button');
-      all.textContent = 'TAKE NEXT';
-      all.onclick = () => this.finish({ type: 'take', uid: snap.tray[0].uid });
-      btns.append(all);
-    }
+    if (kind === 'take' || kind === 'shop') btns.append(this.btn(kind === 'take' ? t('leaveRest') : t('doneShop'), '', () => this.finish({ type: 'done' })));
+    if (kind === 'take') btns.append(this.btn(t('takeNext'), '', () => this.finish({ type: 'take', uid: snap.tray[0].uid })));
     this.measureBar();
-  }
-  measureBar() {
-    const h = $('actionbar').offsetHeight;
-    document.documentElement.style.setProperty('--abh', `${h}px`);
   }
   itemButton(id, { sel, bad, price }) {
     const b = document.createElement('button');
     b.className = `itembtn${sel ? ' sel' : ''}${bad ? ' bad' : ''}${ITEMS[id].rare ? ' rare' : ''}`;
-    b.innerHTML = `${this.img(id, ITEMS[id].name)}<span>${esc(ITEMS[id].name)}</span>${price != null ? `<em class="price">${price}¢</em>` : ''}`;
-    b.title = ITEMS[id].desc;
+    b.innerHTML = `${this.img(id, itemName(id))}<span>${esc(itemName(id))}</span>${price != null ? `<em class="price">${price}¢</em>` : ''}`;
+    b.title = itemDesc(id);
     return b;
   }
+  // One tap selects; using it always takes the button (no double-tap misfires).
   selectSlot(i) {
     const r = this.req;
-    if (!r || r.kind !== 'turn') return;
+    if (!r || r.kind !== 'turn' || r.tgt) return;
     const s = r.snap.players[r.seat].slots[i];
-    if (!s) return;
+    if (!s || r.sel === i) return;
     sfx('ui');
-    if (r.sel === i) { this.useSelected(); return; }
     r.sel = i;
-    const prob = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, s.id);
-    const bad = prob && prob !== 'NEED_TARGET' && prob !== 'NEED_PICK';
-    this.say(this.describe(s.id) + (bad ? `\n(${prob})` : ''), 0);
+    const p = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, s.id);
+    this.say(this.describe(s.id) + (p && !OK_PROBS.has(p) ? `\n(${this.probText(p, r.snap)})` : ''), 0);
     this.renderBar();
   }
   selectTray(uid) {
     const r = this.req;
     if (!r || r.kind === 'turn') return;
-    const t = r.snap.tray.find((x) => x.uid === uid);
-    if (!t) return;
+    const x = r.snap.tray.find((y) => y.uid === uid);
+    if (!x || r.sel === uid) return;
     sfx('ui');
-    if (r.sel === uid) { this.confirmTray(); return; }
     r.sel = uid;
-    this.say(this.describe(t.id) + (r.kind === 'shop' ? ` (${t.price} chips)` : ''), 0);
+    this.say(this.describe(x.id) + (r.kind === 'shop' ? t('chipsTail', { price: x.price }) : ''), 0);
     this.renderBar();
   }
   confirmTray() {
     const r = this.req;
     if (!r || r.sel == null) return;
-    const t = r.snap.tray.find((x) => x.uid === r.sel);
-    if (!t) return;
+    const x = r.snap.tray.find((y) => y.uid === r.sel);
+    if (!x) return;
     if (r.kind === 'shop') {
-      if (t.price > r.snap.players[r.seat].chips) { this.say('Not enough chips.', 2); return; }
-      this.finish({ type: 'buy', uid: t.uid });
-    } else this.finish({ type: 'take', uid: t.uid });
+      if (x.price > r.snap.players[r.seat].chips) { this.say(t('noChips'), 2); return; }
+      this.finish({ type: 'buy', uid: x.uid });
+    } else this.finish({ type: 'take', uid: x.uid });
   }
-  useSelected() {
+  probText(code, snap, target) { return prob(code, { n: target != null && snap ? snap.players[target].name : '' }); }
+
+  async useSelected() {
     const r = this.req;
     if (!r || r.sel == null) return;
     const slot = r.sel;
     const s = r.snap.players[r.seat].slots[slot];
-    const prob = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, s.id);
-    if (prob === 'NEED_TARGET' || prob === 'NEED_PICK') { this.targetModal(slot, s.id); return; }
-    if (prob) { this.say(prob, 2.5); return; }
+    const id = s.id;
+    if (id === 'handheld') {
+      const p0 = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, id, undefined, 'mash');
+      if (p0) { this.say(this.probText(p0, r.snap), 2.5); return; }
+      this.closeBar();
+      const game = this.duo ? await this.duo.choose() : null;
+      if (this.req !== r) return;
+      if (this.duo) this.duo.close();
+      if (game) this.finish({ type: 'item', slot, pick: game }); else this.renderBar();
+      return;
+    }
+    const p = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, id);
+    if (p && !OK_PROBS.has(p)) { this.say(this.probText(p, r.snap), 2.5); return; }
+    if (p === 'NEED_TARGET') { this.beginItemTarget(slot, id); return; }
     this.finish({ type: 'item', slot });
   }
 
-  // ---------- modals ----------
-  modal(title, build) {
-    const p = $('modal-panel');
-    p.innerHTML = `<h2>${esc(title)}</h2>`;
-    build(p);
-    const c = document.createElement('button');
-    c.textContent = 'CANCEL';
-    c.style.marginTop = '8px';
-    c.onclick = () => { sfx('ui'); this.closeModal(); };
-    p.appendChild(c);
-    $('modal').classList.remove('hidden');
-  }
-  closeModal() { $('modal').classList.add('hidden'); }
-  choice(label, sub, onClick, disabled, extraCls = '') {
-    const b = document.createElement('button');
-    b.className = `choice ${extraCls}`;
-    b.innerHTML = `<span>${esc(label)}</span><small>${esc(sub || '')}</small>`;
-    b.disabled = !!disabled;
-    b.onclick = onClick;
-    return b;
-  }
-  shootModal() {
+  // ---------- picking at the table ----------
+  beginShoot() {
     const r = this.req;
     if (!r || r.kind !== 'turn') return;
     sfx('pickup');
-    const { snap, seat } = r;
-    const me = snap.players[seat];
-    this.modal('POINT THE GUN AT…', (p) => {
-      const selfSub = me.double ? 'two shells! both blank = go again' : 'blank = you go again';
-      p.appendChild(this.choice('Yourself', selfSub, () => this.finish({ type: 'shoot', target: seat }), false, 'self'));
-      snap.players.forEach((q, i) => {
-        if (i === seat || !q.alive) return;
-        const sub = `${q.hp}/${q.maxHp} HP${q.doll ? ' · has a Boodoo Doll!' : ''}`;
-        p.appendChild(this.choice(q.name, sub, () => this.finish({ type: 'shoot', target: i })));
-      });
-    });
+    r.tgt = { mode: 'shoot', sel: null };
+    this.view.startTargeting({ kind: 'player', allowSelf: true });
+    this.say(t('aimHint'), 0);
+    this.renderBar();
   }
-  targetModal(slot, id) {
+  beginItemTarget(slot, id) {
     const r = this.req;
-    const { snap, seat } = r;
-    this.modal(`USE ${ITEMS[id].name.toUpperCase()} ON…`, (p) => {
-      snap.players.forEach((q, i) => {
-        if (i === seat || !q.alive) return;
-        const prob = itemProblem(snap.players, snap.shellsLeft, seat, id, i);
-        const bad = prob && prob !== 'NEED_PICK';
-        const n = q.slots.filter(Boolean).length;
-        const sub = bad ? prob : `${q.hp}/${q.maxHp} HP · ${n} item${n === 1 ? '' : 's'}`;
-        p.appendChild(this.choice(q.name, sub, () => {
-          if (id === 'goldglove') this.pickItemModal(slot, i);
-          else this.finish({ type: 'item', slot, target: i });
-        }, bad));
-      });
+    const kind = ITEMS[id].target === 'dead' ? 'dead' : 'player';
+    r.tgt = { mode: 'item', slot, id, sel: null };
+    this.view.startTargeting({
+      kind,
+      problem: (i) => {
+        const p = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, id, i);
+        return p && !OK_PROBS.has(p) ? this.probText(p, r.snap, i) : null;
+      },
     });
+    this.say(t(kind === 'dead' ? 'deadHint' : 'targetHint', { item: itemName(id) }), 0);
+    this.renderBar();
   }
-  pickItemModal(slot, target) {
+  beginItemPick(target) {
     const r = this.req;
-    const q = r.snap.players[target];
-    this.modal(`STEAL FROM ${q.name.toUpperCase()}`, (p) => {
-      const wrap = document.createElement('div');
-      wrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;justify-content:center';
-      q.slots.forEach((s, k) => {
-        if (!s) return;
-        const b = this.itemButton(s.id, {});
-        b.onclick = () => this.finish({ type: 'item', slot, target, pick: k });
-        wrap.appendChild(b);
-      });
-      p.appendChild(wrap);
-    });
+    r.tgt = { mode: 'pickItem', slot: r.tgt.slot, id: r.tgt.id, target, sel: null };
+    this.view.endTargeting(true);
+    this.view.startItemPick(target);
+    this.say(t('itemHint', { item: itemName(r.tgt.id), n: r.snap.players[target].name }), 0);
+    this.renderBar();
+  }
+  endTarget(keepCamera) {
+    const r = this.req;
+    if (r) r.tgt = null;
+    if (!this.view) return;
+    this.view.endTargeting(!!keepCamera);
+    this.view.endItemPick(!!keepCamera);
+  }
+  renderTargetBar() {
+    const r = this.req;
+    const T = r.tgt;
+    const head = $('ab-head'), btns = $('ab-buttons');
+    const snap = r.snap;
+    let label = t('confirm');
+    if (T.mode === 'shoot') {
+      head.textContent = '';
+      if (T.sel != null) label = T.sel === r.seat ? t('shootSelf') : t('shootAt', { n: snap.players[T.sel].name });
+    } else if (T.mode === 'item') {
+      head.textContent = itemName(T.id).toUpperCase();
+      if (T.sel != null) label = t('useOn', { n: snap.players[T.sel].name });
+    } else {
+      head.textContent = itemName(T.id).toUpperCase();
+      const it = T.sel != null ? snap.players[T.target].slots[T.sel] : null;
+      if (it) label = T.id === 'trash' ? t('trashThis', { item: itemName(it.id) }) : t('stealThis', { item: itemName(it.id) });
+    }
+    btns.append(
+      this.btn(t('cancel'), '', () => { sfx('ui'); this.endTarget(); r.tgt = null; this.clearCaption(); this.renderBar(); }),
+      this.btn(label, T.mode === 'shoot' ? 'shootbtn' : 'big accent', () => this.confirmTarget(), T.sel == null),
+    );
+  }
+  confirmTarget() {
+    const r = this.req;
+    const T = r && r.tgt;
+    if (!T || T.sel == null) return;
+    if (T.mode === 'shoot') { this.finish({ type: 'shoot', target: T.sel }); return; }
+    if (T.mode === 'item') {
+      const p = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, T.id, T.sel);
+      if (p === 'NEED_PICK') { this.beginItemPick(T.sel); return; }
+      this.finish({ type: 'item', slot: T.slot, target: T.sel });
+      return;
+    }
+    this.finish({ type: 'item', slot: T.slot, target: T.target, pick: T.sel });
   }
 
   // 3D clicks from the table
   onPick(pick, snap) {
     const r = this.req;
     if (!pick) return;
+    if (r && r.tgt) {
+      const T = r.tgt;
+      if (T.mode === 'pickItem') {
+        if (pick.kind === 'item' && pick.owner === T.target && snap.players[T.target].slots[pick.slot]) {
+          T.sel = pick.slot;
+          this.view.selectItem(pick.slot);
+          const id = snap.players[T.target].slots[pick.slot].id;
+          this.say(this.describe(id), 0);
+          this.renderBar();
+        }
+        return;
+      }
+      let idx = null;
+      if (pick.kind === 'target') idx = pick.idx;
+      if (pick.kind === 'player') idx = pick.idx;
+      if (idx == null || !this.view.targeting) return;
+      if (!this.view.targeting.valid.has(idx)) {
+        const ring = this.view.targeting.rings.find((m) => m.userData.pick.idx === idx);
+        if (ring && T.mode === 'item') {
+          const p = itemProblem(r.snap.players, r.snap.shellsLeft, r.seat, T.id, idx);
+          if (p && !OK_PROBS.has(p)) this.say(this.probText(p, r.snap, idx), 2.5);
+        }
+        return;
+      }
+      T.sel = idx;
+      this.view.selectTarget(idx);
+      this.renderBar();
+      return;
+    }
     if (r && r.kind === 'turn') {
       if (pick.kind === 'item' && pick.owner === r.seat) { this.selectSlot(pick.slot); return; }
-      if (pick.kind === 'gun' || (pick.kind === 'player' && pick.idx !== r.seat)) { this.shootModal(); return; }
+      if (pick.kind === 'gun') { this.beginShoot(); return; }
     }
     if (r && r.kind !== 'turn' && pick.kind === 'tray') { this.selectTray(pick.uid); return; }
     if (pick.kind === 'item' || pick.kind === 'tray') {
@@ -375,7 +408,7 @@ export class UI {
 
   // ---------- help ----------
   buildHelp() {
-    $('help-items').innerHTML = ITEM_IDS.map((id) => `<div class="hitem">${this.img(id, ITEMS[id].name)}<div><b>${esc(ITEMS[id].name)}</b>${esc(ITEMS[id].desc)}</div></div>`).join('');
+    $('help-items').innerHTML = ITEM_IDS.map((id) => `<div class="hitem">${this.img(id, itemName(id))}<div><b>${esc(itemName(id))}</b>${esc(itemDesc(id))}</div></div>`).join('');
   }
 
   // ---------- scoreboard ----------
@@ -387,9 +420,8 @@ export class UI {
         <td class="num">${wins[p.name] || 0}</td><td class="num">${s.dmgDealt}</td><td class="num">${s.kills}</td>
         <td class="num">${s.shots}</td><td class="num">${s.itemsUsed}</td></tr>`;
     }).join('');
-    $('score-table').innerHTML = `<tr><th></th><th>Player</th><th class="num">Wins</th><th class="num">Dmg</th><th class="num">Kills</th><th class="num">Shots</th><th class="num">Items</th></tr>${rows}`;
-    const w = players[standings[0]];
-    $('score-title').textContent = `${w.name.toUpperCase()} WINS`;
+    $('score-table').innerHTML = `<tr><th></th><th>${t('thPlayer')}</th><th class="num">${t('thWins')}</th><th class="num">${t('thDmg')}</th><th class="num">${t('thKills')}</th><th class="num">${t('thShots')}</th><th class="num">${t('thItems')}</th></tr>${rows}`;
+    $('score-title').textContent = t('winsTitle', { n: players[standings[0]].name });
     $('btn-rematch').disabled = !canRematch;
     $('score-hint').textContent = hint || '';
     this.show('screen-score');

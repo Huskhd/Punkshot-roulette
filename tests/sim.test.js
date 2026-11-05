@@ -1,6 +1,6 @@
 // Plays thousands of bot-vs-bot games through the real rules engine and checks
 // invariants. Run: npm test
-import { Game, MAX_SLOTS, redactEvents, mulberry32 } from '../js/engine.js';
+import { Game, MAX_SLOTS, MINIGAME_IDS, redactEvents, mulberry32 } from '../js/engine.js';
 import { botAction } from '../js/bot.js';
 
 let failures = 0;
@@ -16,7 +16,9 @@ function play({ levels, mode, hp, seed }) {
     if (++steps > 5000) { assert(false, `game did not finish (${mode}, ${levels})`); break; }
     const d = g.decision;
     assert(d && g.players[d.player].alive, 'decision for a dead/missing player');
-    let a = botAction(g, d.player, levels[d.player], rng);
+    let a = d.kind === 'minigame'
+      ? { type: 'scores', scores: g.players.map(() => Math.floor(rng() * 100)) }
+      : botAction(g, d.player, levels[d.player], rng);
     if (d.kind === 'turn' && a.type === 'item') { itemStreak++; if (itemStreak > 12) a = { type: 'shoot', target: d.player }; }
     else itemStreak = 0;
     const r = g.act(d.player, a);
@@ -28,6 +30,7 @@ function play({ levels, mode, hp, seed }) {
     } else events = r.events;
     for (const e of events) {
       counts[e.t] = (counts[e.t] || 0) + 1;
+      if (e.t === 'item' && e.id === 'handheld') assert(MINIGAME_IDS.includes(e.game), 'bad minigame id');
       if (e.secret) {
         const red = redactEvents([e], (e.secret.for + 1) % levels.length)[0];
         assert(!red.secret, 'secret leaked');
@@ -36,6 +39,7 @@ function play({ levels, mode, hp, seed }) {
     for (const p of g.players) {
       assert(p.slots.length === MAX_SLOTS, 'slot count changed');
       assert(p.hp >= 0 && p.hp <= p.maxHp, 'hp out of range ' + p.hp);
+      assert(p.shield >= 0, 'negative shield');
       assert(p.alive === p.hp > 0, 'alive flag mismatch');
       const uids = p.slots.filter(Boolean).map((s) => s.uid);
       assert(new Set(uids).size === uids.length, 'duplicate item uid');
