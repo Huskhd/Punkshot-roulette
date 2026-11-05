@@ -1,0 +1,12 @@
+{
+  "name": "muckshot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Muckshot — a low-poly shotgun roulette party game for the browser.",
+  "scripts": {
+    "test": "node tests/sim.test.js",
+    "serve": "npx --yes http-server -c-1 -p 8080 ."
+  },
+  "license": "MIT"
+}
