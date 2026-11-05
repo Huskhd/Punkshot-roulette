@@ -294,7 +294,7 @@ $('btn-create').onclick = async () => {
 
 function lobbyMsg() {
   const L = app.online.lobby;
-  return { t: 'lobby', code: app.online.code, players: L.players.map((p) => ({ name: p.name, kind: p.kind, level: p.level })), hp: L.hp, itemMode: L.itemMode };
+  return { t: 'lobby', code: app.online.code, players: L.players.map((p) => ({ name: p.name, kind: p.kind, level: p.level, via: p.conn ? p.conn.via : '' })), hp: L.hp, itemMode: L.itemMode };
 }
 function broadcastLobby() {
   const msg = lobbyMsg();
@@ -330,7 +330,11 @@ function wireHost() {
     }
   };
   net.onMsg = (conn, msg) => {
-    if (msg.t === 'act' && O.session) O.session.onRemoteAction(conn, msg.action);
+    if (msg.t === 'act' && O.session) O.session.onRemoteAction(conn, msg);
+    else if (msg.t === 'resync') {
+      if (O.session && O.session.game && !O.session.stopped) O.session.resync(conn, !!msg.inGame);
+      else if (!O.session) net.send(conn, lobbyMsg());
+    }
   };
   net.onError = (text) => ui.toast(text);
 }
@@ -346,7 +350,7 @@ function renderLobby() {
   list.innerHTML = '';
   L.players.forEach((p, i) => {
     const li = document.createElement('li');
-    const tag = p.kind === 'host' ? 'host' : p.kind === 'bot' ? `bot · ${DIFFICULTIES[p.level]}` : 'player';
+    const tag = p.kind === 'host' ? 'host' : p.kind === 'bot' ? `bot · ${DIFFICULTIES[p.level]}` : `player${p.via ? ` · ${p.via}` : ''}`;
     const youMark = (host && i === 0) || (!host && p.name === O.myName && p.kind === 'remote') ? ' (you)' : '';
     li.innerHTML = `<span>${CHARACTERS[i].name} — <b></b>${youMark}</span><span class="tag">${tag}</span>`;
     li.querySelector('b').textContent = p.name;
@@ -390,8 +394,8 @@ $('btn-lobby-start').onclick = () => hostStartGame();
 const inviteLink = () => {
   const q = new URLSearchParams();
   q.set('room', app.online ? app.online.code : '');
-  const peer = new URLSearchParams(location.search).get('peer');
-  if (peer) q.set('peer', peer);
+  const cur = new URLSearchParams(location.search);
+  for (const k of ['peer', 'relay', 'p2p']) if (cur.get(k)) q.set(k, cur.get(k));
   return `${location.origin}${location.pathname}?${q}`;
 };
 async function copy(text, okMsg) {
@@ -413,19 +417,45 @@ function hostToLobby() {
 }
 
 class HostSession {
-  constructor(O) { this.O = O; this.stopped = false; this.waiting = null; }
+  constructor(O) { this.O = O; this.stopped = false; this.waiting = null; this.seq = 0; this.lastAid = {}; this.pending = {}; }
   stop() { this.stopped = true; ui.cancelRequest(); if (this.waiting) { const w = this.waiting; this.waiting = null; w.res(null); } }
   seats() { return this.O.lobby.players; }
   present(events) {
     const snap = this.game.snapshot();
-    this.seats().forEach((p, i) => { if (p.kind === 'remote' && p.conn) this.O.net.send(p.conn, { t: 'ev', ev: redactEvents(events, i), snap }); });
+    const seq = ++this.seq;
+    this.seats().forEach((p, i) => { if (p.kind === 'remote' && p.conn) this.O.net.send(p.conn, { t: 'ev', ev: redactEvents(events, i), snap, seq }); });
     return view.play(redactEvents(events, 0), snap);
   }
-  onRemoteAction(conn, action) {
+  // A friend's move can arrive before we're ready for it (their animations may
+  // finish first), so it's queued. Resent copies carry the same aid and are ignored.
+  onRemoteAction(conn, msg) {
+    const i = this.seats().findIndex((p) => p.kind === 'remote' && p.conn === conn);
+    if (i < 0 || !msg.action) return;
+    if (msg.aid != null && msg.aid <= (this.lastAid[i] || 0)) return;
     const w = this.waiting;
-    if (!w || this.seats()[w.seat].conn !== conn) return;
-    this.waiting = null;
-    w.res(action);
+    if (w && w.seat === i) {
+      this.waiting = null;
+      if (msg.aid != null) this.lastAid[i] = msg.aid;
+      w.res(msg.action);
+    } else this.pending[i] = msg;
+  }
+  waitRemote(i) {
+    const p = this.pending[i];
+    delete this.pending[i];
+    if (p && !(p.aid != null && p.aid <= (this.lastAid[i] || 0))) {
+      if (p.aid != null) this.lastAid[i] = p.aid;
+      return Promise.resolve(p.action);
+    }
+    return new Promise((res) => { this.waiting = { seat: i, res }; });
+  }
+  // A friend missed a message (or the game start): send them the current state.
+  resync(conn, inGame) {
+    const seats = this.seats();
+    const i = seats.findIndex((p) => p.kind === 'remote' && p.conn === conn);
+    if (i < 0 || !this.game) return;
+    const snap = this.game.snapshot();
+    if (!inGame) this.O.net.send(conn, { t: 'start', players: this.players, you: i, pre: snap });
+    this.O.net.send(conn, { t: 'state', snap, seq: this.seq });
   }
   onRemoteLeave(i) {
     const p = this.seats()[i];
@@ -440,6 +470,7 @@ class HostSession {
   async run() {
     const seats = this.seats();
     const players = seats.map((p, i) => ({ name: p.name, char: i }));
+    this.players = players;
     const game = new Game({ players, hp: this.O.lobby.hp, itemMode: this.O.lobby.itemMode });
     this.game = game;
     const pre = game.snapshot();
@@ -454,7 +485,7 @@ class HostSession {
       const seat = seats[d.player];
       let action = null;
       if (seat.kind === 'remote') {
-        action = await new Promise((res) => { this.waiting = { seat: d.player, res }; });
+        action = await this.waitRemote(d.player);
         if (this.stopped) return;
         if (!action) continue; // they left — the seat is a bot now
       } else if (seat.kind === 'host') {
@@ -505,6 +536,7 @@ $('btn-join').onclick = async () => {
     app.wins = {};
     net.onMsg = (msg) => clientMsg(msg);
     net.onClose = () => { if (app.online && app.online.net === net) { ui.toast('Lost connection to the host.', 3500); toTitle(); } };
+    startClientSyncLoop(app.online);
     $('lobby-info').textContent = 'Joined. Waiting for the host…';
     ui.show('screen-lobby');
     renderLobby();
@@ -531,6 +563,7 @@ function clientMsg(msg) {
       O.session.start();
       break;
     case 'ev': if (O.session) O.session.onEvents(msg); break;
+    case 'state': if (O.session) O.session.onState(msg); break;
     case 'err': if (O.session) O.session.onError(msg.msg); break;
     case 'note': ui.toast(msg.text, 3000); break;
     case 'toLobby':
@@ -556,15 +589,36 @@ class ClientSession {
     this.busy = false;
     this.stopped = false;
     this.lastSnap = startMsg.pre;
+    this.nextSeq = 1;
+    this.aid = 0;
+    this.pendingAct = null;
   }
-  stop() { this.stopped = true; ui.cancelRequest(); }
+  stop() { this.stopped = true; ui.cancelRequest(); this.clearPending(); }
+  clearPending() { this.pendingAct = null; clearInterval(this.resendT); }
+  idle() { return !this.busy && !ui.req && !this.pendingAct && !(this.lastSnap && this.lastSnap.over); }
   start() {
     view.setup(this.players, this.you, this.pre);
     ui.hideScreens();
     ui.showHud(true);
   }
-  onEvents(msg) { this.queue.push(msg); this.pump(); }
-  onError(text) { ui.say(text, 2.5); if (!this.busy) this.ask(this.lastSnap); }
+  onEvents(msg) {
+    this.clearPending();
+    if (msg.seq != null) {
+      if (msg.seq < this.nextSeq) return; // duplicate
+      if (msg.seq > this.nextSeq) { this.O.net.send({ t: 'resync', inGame: true }); return; } // missed one
+      this.nextSeq = msg.seq + 1;
+    }
+    this.queue.push(msg);
+    this.pump();
+  }
+  onState(msg) {
+    if (msg.seq < this.nextSeq) return; // nothing new
+    this.clearPending();
+    this.nextSeq = msg.seq + 1;
+    this.queue = [{ ev: [], snap: msg.snap }];
+    this.pump();
+  }
+  onError(text) { this.clearPending(); ui.say(text, 2.5); if (!this.busy) this.ask(this.lastSnap); }
   async pump() {
     if (this.busy) return;
     this.busy = true;
@@ -585,8 +639,28 @@ class ClientSession {
   async ask(s) {
     if (!s || !s.decision || s.decision.player !== this.you || s.over) return;
     const a = await ui.requestAction(s, this.you);
-    if (a && !this.stopped) this.O.net.send({ t: 'act', action: a });
+    if (!a || this.stopped) return;
+    const msg = { t: 'act', action: a, aid: ++this.aid };
+    this.pendingAct = msg;
+    this.O.net.send(msg);
+    let tries = 0;
+    clearInterval(this.resendT);
+    this.resendT = setInterval(() => {
+      if (this.pendingAct !== msg || ++tries > 6) { clearInterval(this.resendT); return; }
+      this.O.net.send(msg); // the host ignores copies it already has
+    }, 4000);
   }
+}
+
+// Safety net for lossy connections: every few seconds, while nothing is
+// happening, ask the host whether we missed anything (game start or events).
+function startClientSyncLoop(O) {
+  const t = setInterval(() => {
+    if (app.online !== O) { clearInterval(t); return; }
+    const s = O.session;
+    if (!s) O.net.send({ t: 'resync', inGame: false });
+    else if (s.idle()) O.net.send({ t: 'resync', inGame: true });
+  }, 6000);
 }
 
 // ---------- boot ----------

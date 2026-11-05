@@ -75,13 +75,27 @@ needs no build step and no settings beyond one switch:
 Other options that work the same way: drag the folder onto [Netlify Drop](https://app.netlify.com/drop), or zip it
 and upload to itch.io as an HTML game (`index.html` at the zip root).
 
-Online play needs **no server of your own**: rooms connect peer-to-peer over WebRTC with
-[PeerJS](https://peerjs.com/), whose free public broker only introduces the players. The host's browser runs the
-game; if a player disconnects mid-game, a bot takes their seat. If the host closes the tab, the room ends.
+Online play needs **no server of your own**. Each friend connects two ways at once and keeps whichever works first:
 
-> Some strict networks (certain mobile carriers, corporate Wi-Fi) block peer-to-peer connections. If a friend
-> can't join, try switching them to another network or Wi-Fi. If you'd rather run your own broker:
-> `npx peer --port 9000` and open the game with `?peer=your-host:9000` (invite links keep that setting).
+- **direct** — peer-to-peer over WebRTC via [PeerJS](https://peerjs.com/) (its free public broker only introduces the players).
+- **relay** — messages pass through free public MQTT brokers (EMQX, HiveMQ, Mosquitto test servers) over secure
+  WebSockets. This works from mobile data and strict routers, where direct connections often fail.
+
+The lobby shows how each friend got in (`player · direct` or `player · relay`). The host's browser runs the game; if a
+player disconnects mid-game, a bot takes their seat. If the host closes the tab, the room ends. If a message gets lost
+on the way, the friend's game quietly re-syncs from the host.
+
+> The relay brokers are shared public test servers: free and account-free, but with no uptime promise, and anyone who
+> guesses a room's topic could read its moves. Fine for a game night; don't send anything private through it.
+> Very locked-down networks (some schools/offices) block the relay's ports. If a friend can't join, try another network.
+
+URL options, mostly for testing or self-hosting (invite links keep these):
+
+| Option | Effect |
+| --- | --- |
+| `?relay=0` / `?p2p=0` | Use only the direct link / only the relay. |
+| `?relay=wss://host:port/path` | Use your own MQTT-over-WebSocket broker(s) (comma-separated). |
+| `?peer=host:port` | Use your own PeerJS broker (`npx peer --port 9000`). |
 
 ## Run locally
 
@@ -110,9 +124,9 @@ npm test
 | `js/gfx.js` | PS1 vertex snapping, procedural pixel textures, tween system. |
 | `js/audio.js` | Synthesized sound effects and swamp ambience. |
 | `js/ui.js` | Captions, HUD, action bar, pickers, scoreboard. |
-| `js/net.js` | Online rooms (PeerJS). |
+| `js/net.js` | Online rooms: direct (PeerJS) and relay (MQTT) racing, heartbeats, re-join. |
 | `js/main.js` | App flow: local, pass-and-play, online host and client sessions. |
-| `lib/` | Vendored Three.js r160 and PeerJS 1.5.4 (both MIT). |
+| `lib/` | Vendored Three.js r160, PeerJS 1.5.4 and MQTT.js 5.10.1 (all MIT). |
 
 Swapping in CC0 models: `makeItem(id)`, `makeCharacter(kind)`, `makeGun()` etc. each return a `THREE.Group`.
 Replace the body of one with a loaded GLTF (keep the origin at the base and the same rough size) and the rest of the
