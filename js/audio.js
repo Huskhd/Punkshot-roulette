@@ -7,6 +7,10 @@ let ambBus = null;
 let noiseBuf = null;
 let muted = false;
 let ambienceOn = false;
+let musicBus = null;
+let musicOn = true;
+let tense = false;
+const MUSIC_VOL = 0.5;
 
 export function initAudio() {
   if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
@@ -28,6 +32,7 @@ export function initAudio() {
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   startAmbience();
+  startMusic();
 }
 
 export function setMuted(m) {
@@ -320,4 +325,204 @@ function startAmbience() {
     setTimeout(tick, 900 + Math.random() * 2600);
   };
   setTimeout(tick, 1500);
+}
+
+// ---------------------------------------------------------------------------
+// Background music: a slow, smoky noir-jazz loop for a back-room bar — walking
+// upright bass, brushes and ride cymbal, Rhodes chords, and a vibraphone that
+// wanders in now and then. Everything is generated and scheduled on the fly,
+// with a little randomness so the loop never repeats exactly.
+// On your last life a low heartbeat joins the band.
+
+export function setMusic(on) {
+  musicOn = !!on;
+  if (musicBus) musicBus.gain.setTargetAtTime(musicOn ? MUSIC_VOL : 0, ctx.currentTime, 0.4);
+}
+export function isMusicOn() { return musicOn; }
+export function setMusicTension(on) { tense = !!on; }
+
+const BPM = 74;
+const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+// D minor, eight bars: Dm9 · Dm9/C · Bm7b5 · Bb7 · Gm9 · Gm9 · Em7b5 · A7b9
+const PROG = [
+  { root: 38, tones: [0, 3, 7, 10], voicing: [53, 57, 60, 64] },
+  { root: 36, tones: [0, 2, 5, 9], voicing: [53, 57, 60, 64] },
+  { root: 35, tones: [0, 3, 6, 10], voicing: [53, 57, 59, 62] },
+  { root: 34, tones: [0, 4, 7, 10], voicing: [50, 56, 60, 65] },
+  { root: 43, tones: [0, 3, 7, 10], voicing: [53, 57, 58, 62] },
+  { root: 43, tones: [0, 3, 7, 10], voicing: [53, 58, 62, 65] },
+  { root: 40, tones: [0, 3, 6, 10], voicing: [50, 55, 58, 62] },
+  { root: 45, tones: [0, 4, 7, 10], voicing: [55, 58, 61, 64] },
+];
+const BLUES = [62, 65, 67, 68, 69, 72, 74, 77]; // D minor blues, for the vibes
+const M = { next: 0, step: 0, bar: 0, timer: 0, comp: null, vibes: null, beatLen: 60 / BPM };
+
+function startMusic() {
+  if (musicBus) return;
+  musicBus = ctx.createGain();
+  musicBus.gain.value = musicOn ? MUSIC_VOL : 0;
+  // small dark room reverb
+  const len = Math.floor(ctx.sampleRate * 2.2);
+  const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = ir.getChannelData(ch);
+    let lp = 0;
+    for (let i = 0; i < len; i++) { lp += (Math.random() * 2 - 1 - lp) * 0.35; data[i] = lp * Math.pow(1 - i / len, 3.2); }
+  }
+  const verb = ctx.createConvolver();
+  verb.buffer = ir;
+  const wet = ctx.createGain();
+  wet.gain.value = 0.32;
+  musicBus.connect(master);
+  musicBus.connect(verb).connect(wet).connect(master);
+  M.next = ctx.currentTime + 0.3;
+  M.timer = setInterval(schedule, 90);
+}
+
+function schedule() {
+  if (!ctx || !musicBus) return;
+  const t0 = ctx.currentTime;
+  if (!musicOn || muted || ctx.state !== 'running' || M.next < t0 - 0.2) {
+    // paused, or the tab slept: pick up again from "now" instead of bursting
+    M.next = t0 + 0.1;
+    return;
+  }
+  const beat = M.beatLen;
+  while (M.next < t0 + 0.35) {
+    playStep(M.bar, M.step, M.next, beat);
+    M.next += (M.step % 2 === 0 ? 0.63 : 0.37) * beat; // swung eighths
+    if (++M.step === 8) { M.step = 0; M.bar = (M.bar + 1) % 16; }
+  }
+}
+
+// one swung eighth note of the band
+function playStep(bar, step, t, beat) {
+  const ch = PROG[bar % 8];
+  const next = PROG[(bar + 1) % 8];
+  const second = bar >= 8; // second time around: sparser bass, more vibes
+  const onBeat = step % 2 === 0;
+  const b = step >> 1;
+
+  // --- bass ---
+  if (onBeat && (!second || bar >= 12 || b % 2 === 0)) {
+    let m;
+    if (b === 0) m = ch.root;
+    else if (b === 3 && !(second && bar < 12)) m = next.root + (Math.random() < 0.5 ? 1 : -1);
+    else m = ch.root + ch.tones[1 + Math.floor(Math.random() * 3)];
+    while (m > 50) m -= 12;
+    while (m < 31) m += 12;
+    bass(t, mtof(m), second && bar < 12 ? beat * 1.9 : beat * 0.92);
+  }
+
+  // --- drums ---
+  if ([0, 2, 3, 4, 6, 7].includes(step)) ride(t, onBeat ? 0.022 : 0.013);
+  if (step === 2 || step === 6) chick(t);
+  if (onBeat) brush(t, beat);
+  if ((step === 0 || step === 4) && Math.random() < 0.8) feather(t);
+  if (tense && (step === 0 || step === 4)) heart(t);
+
+  // --- Rhodes comping (Charleston: beat 1 and the "and" of 2, or one long chord) ---
+  if (step === 0) M.comp = Math.random() < 0.35 ? 'long' : 'charleston';
+  if (step === 0) rhodes(t, ch.voicing, M.comp === 'long' ? beat * 3.5 : beat * 0.55);
+  if (step === 3 && M.comp === 'charleston' && Math.random() < 0.85) rhodes(t, ch.voicing, beat * 1.1);
+
+  // --- vibes: a short phrase now and then ---
+  if (step === 0) {
+    M.vibes = null;
+    if (Math.random() < (second ? 0.55 : 0.22)) {
+      const n = 2 + Math.floor(Math.random() * 3);
+      let k = 2 + Math.floor(Math.random() * 4);
+      const notes = [];
+      for (let i = 0; i < n; i++) { notes.push(BLUES[k]); k = Math.max(0, Math.min(BLUES.length - 1, k + (Math.random() < 0.6 ? -1 : 1) * (1 + Math.floor(Math.random() * 2)))); }
+      M.vibes = { start: 1 + Math.floor(Math.random() * 3), notes };
+    }
+  }
+  if (M.vibes) {
+    const i = step - M.vibes.start;
+    if (i >= 0 && i < M.vibes.notes.length) vibes(t, mtof(M.vibes.notes[i]), i === M.vibes.notes.length - 1 ? beat * 2 : beat * 0.6);
+  }
+}
+
+function env(g, t, peak, attack, dur) {
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(peak, t + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+}
+function bass(t, f, dur) {
+  const o = ctx.createOscillator();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(f * 1.012, t);
+  o.frequency.exponentialRampToValueAtTime(f, t + 0.06);
+  const sub = ctx.createOscillator();
+  sub.frequency.value = f;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(900, t);
+  lp.frequency.exponentialRampToValueAtTime(260, t + 0.25);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.32, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.13, t + 0.18);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.12);
+  const sg = ctx.createGain();
+  sg.gain.value = 0.6;
+  o.connect(lp);
+  sub.connect(sg).connect(lp);
+  lp.connect(g).connect(musicBus);
+  o.start(t); sub.start(t);
+  o.stop(t + dur + 0.2); sub.stop(t + dur + 0.2);
+}
+function ride(t, gain) {
+  noise(t, 0.5, { type: 'bandpass', f0: 7600, f1: 6400, q: 1.6, gain, attack: 0.002, out: musicBus });
+  tone(t, 0.35, { type: 'square', f0: 3170, gain: gain * 0.12, attack: 0.002, out: musicBus });
+}
+function chick(t) { noise(t, 0.05, { type: 'highpass', f0: 6000, gain: 0.02, attack: 0.002, out: musicBus }); }
+function brush(t, beat) { noise(t, beat * 0.7, { type: 'bandpass', f0: 2400, f1: 3800, q: 0.8, gain: 0.012, attack: beat * 0.3, out: musicBus }); }
+function feather(t) { tone(t, 0.18, { f0: 62, f1: 42, gain: 0.08, out: musicBus }); }
+function heart(t) {
+  tone(t, 0.14, { f0: 58, f1: 36, gain: 0.3, out: musicBus });
+  tone(t + 0.2, 0.16, { f0: 52, f1: 32, gain: 0.22, out: musicBus });
+}
+function rhodes(t, notes, dur) {
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 2200;
+  lp.connect(musicBus);
+  notes.forEach((m, i) => {
+    const tt = t + i * 0.008; // a hint of a rolled chord
+    const f = mtof(m);
+    const car = ctx.createOscillator();
+    car.frequency.value = f;
+    const mod = ctx.createOscillator();
+    mod.frequency.value = f;
+    const mg = ctx.createGain();
+    mg.gain.setValueAtTime(f * 1.4, tt);
+    mg.gain.exponentialRampToValueAtTime(f * 0.15, tt + 0.35);
+    mod.connect(mg).connect(car.frequency);
+    const g = ctx.createGain();
+    env(g, tt, 0.028, 0.006, dur + 0.7);
+    car.connect(g).connect(lp);
+    car.start(tt); mod.start(tt);
+    car.stop(tt + dur + 0.8); mod.stop(tt + dur + 0.8);
+  });
+}
+function vibes(t, f, dur) {
+  const o = ctx.createOscillator();
+  o.frequency.value = f;
+  const o2 = ctx.createOscillator();
+  o2.frequency.value = f * 4;
+  const g2 = ctx.createGain();
+  env(g2, t, 0.006, 0.002, 0.25);
+  const g = ctx.createGain();
+  env(g, t, 0.05, 0.003, dur + 1.2);
+  const trem = ctx.createOscillator();
+  trem.frequency.value = 5.2;
+  const tg = ctx.createGain();
+  tg.gain.value = 0.35;
+  const amp = ctx.createGain();
+  amp.gain.value = 0.65;
+  trem.connect(tg).connect(amp.gain);
+  o.connect(g).connect(amp).connect(musicBus);
+  o2.connect(g2).connect(musicBus);
+  [o, o2, trem].forEach((x) => { x.start(t); x.stop(t + dur + 1.3); });
 }

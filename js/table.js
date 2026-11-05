@@ -2,7 +2,7 @@
 // The view never decides anything; it replays events from the rules engine and
 // then snaps to the authoritative snapshot (sync) so it can't drift.
 import {
-  THREE, snapUniform, animate, wait, ease, moveTo, turnTo, scaleTo, tickAnims, finishAll, lookQuat, quatFromEuler, basic,
+  THREE, snapUniform, tickGlow, animate, wait, ease, moveTo, turnTo, scaleTo, tickAnims, finishAll, lookQuat, quatFromEuler, basic,
 } from './gfx.js';
 import * as M from './models.js';
 import { sfx } from './audio.js';
@@ -12,7 +12,8 @@ import { gameName } from './minigames.js';
 const TY = M.TABLE_Y;
 const ITEM_SCALE = 1.75;
 const SLOT_ROWS = [1.3, 1.02];
-const SLOT_COLS = [-0.48, -0.16, 0.16, 0.48];
+const SLOT_COLS = [-0.36, 0, 0.36];
+const SLOT_N = SLOT_COLS.length;
 const STATUS_ORDER = ['doll', 'saw', 'insured', 'double', 'hacked'];
 const STATUS_ITEM = { doll: 'doll', saw: 'saw', insured: 'insurance', double: 'double', hacked: 'hack' };
 const V3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -128,6 +129,7 @@ export class TableView {
     const dt = Math.min(0.1, this.clock.getDelta());
     this.time += dt;
     const t0 = this.time;
+    tickGlow(t0);
     tickAnims(dt);
     this.lamp.rotation.z = Math.sin(t0 * 0.5) * 0.035;
     this.lamp.rotation.x = Math.cos(t0 * 0.37) * 0.025;
@@ -395,7 +397,7 @@ export class TableView {
     }, ease.out).then(() => { this.scene.remove(m); m.geometry.dispose(); m.material.dispose(); });
   }
 
-  slotPos(i, slot) { return this.P[i].seat.at(SLOT_ROWS[slot >> 2], SLOT_COLS[slot & 3], TY); }
+  slotPos(i, slot) { return this.P[i].seat.at(SLOT_ROWS[Math.floor(slot / SLOT_N)], SLOT_COLS[slot % SLOT_N], TY); }
   slotQuat(i, slot) { return quatFromEuler(0, this.P[i].seat.a + (((slot * 37) % 7) - 3) * 0.05, 0); }
   makeItemMesh(id, uid) {
     const m = M.makeItem(id);
@@ -489,7 +491,7 @@ export class TableView {
     const P = this.P[i];
     const cur = P.status[key];
     if (on && !cur) {
-      const m = M.makeItem(STATUS_ITEM[key]);
+      const m = M.makeItem(STATUS_ITEM[key], { glow: false });
       const k = STATUS_ORDER.indexOf(key);
       m.position.copy(P.seat.at(0.8, 0.16 + k * 0.1, TY));
       m.rotation.y = P.seat.a;
@@ -589,7 +591,10 @@ export class TableView {
     m.position.set(p.x, this.tray.userData.top, p.z);
     m.rotation.y = (Math.random() - 0.5) * 1.2;
     m.scale.setScalar(scale);
-    if (shop) m.userData.label = this.addTag(`<span class="chip"></span>${x.price}`, m, { offset: V3(0, 0.13, 0), cls: 'price', group: 'price' });
+    if (shop) {
+      const tier = M.itemTier(x.id);
+      m.userData.label = this.addTag(`<span class="chip"></span>${x.price}`, m, { offset: V3(0, 0.13, 0), cls: `price${tier !== 'common' ? ` t-${tier}` : ''}`, group: 'price' });
+    }
     this.trayItems.set(x.uid, m);
     return m;
   }
@@ -862,7 +867,7 @@ export class TableView {
       case 'revive': await this.revive(e); break;
       case 'mgResult': {
         const losers = e.losers.map((i) => (i === this.viewer ? t('you') : this.names[i])).join(', ');
-        this.say(t('c_mgResult', { losers }), 3);
+        this.say(t('c_mgResult', { losers, k: e.dmg || 1 }), 3);
         await wait(1.4);
         break;
       }
@@ -1132,6 +1137,12 @@ export class TableView {
     const P = this.P[e.player];
     vs.players[e.player].hp = e.hp;
     vs.players[e.player].shield = e.shield;
+    if (e.immune) {
+      sfx('clang');
+      this.puff(P.char.position.clone().add(V3(0, 1.1, 0)), 0xe8c040, 2);
+      this.say(t('c_immune', { a: this.A(e.player) }), 2);
+      await wait(0.8);
+    }
     if (e.blocked) {
       sfx('clang');
       this.setShields(P, e.shield, true);
@@ -1150,6 +1161,7 @@ export class TableView {
       }
       this.say(t('c_damage', { a: this.A(e.player), k: e.amount }), 2.2);
       if (e.player === this.viewer) this.ui.hurt && this.ui.hurt();
+      if (e.hp === 1) { this.hud(); await wait(1.1); this.say(t('c_lastLife', { a: this.A(e.player) }), 2.4); }
     }
     this.hud();
     await wait(e.amount > 0 ? 1.0 : 0.3);
@@ -1621,7 +1633,7 @@ export class TableView {
     const oldAlpha = r.getClearAlpha();
     r.setClearColor(0x000000, 0);
     for (const id of ids) {
-      const m = M.makeItem(id);
+      const m = M.makeItem(id, { glow: false });
       const bb = new THREE.Box3().setFromObject(m);
       const ctr = bb.getCenter(V3());
       const size = bb.getSize(V3()).length();

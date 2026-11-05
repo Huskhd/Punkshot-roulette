@@ -27,7 +27,9 @@
     <div id="plates"></div>
     <div id="roundinfo"></div>
     <button id="btn-menu" class="iconbtn" aria-label="Menu">≡</button>
+    <button id="btn-admin-hud" class="hidden" data-i18n="adm_title"></button>
   </div>
+  <div id="admin-panel" class="hidden"></div>
   <div id="caption" aria-live="polite"></div>
   <div id="tooltip" class="hidden"></div>
   <div id="actionbar" class="hidden">
@@ -53,8 +55,26 @@
       <div class="row small">
         <button id="btn-lang-t" class="toggle" data-i18n="langBtn"></button>
         <button id="btn-sound-t" class="toggle"></button>
+        <button id="btn-music-t" class="toggle"></button>
         <button id="btn-pixels-t" class="toggle"></button>
       </div>
+      <button id="btn-admin" class="admin-mini" aria-label="Admin" title="Admin">⚙</button>
+    </div>
+  </section>
+
+  <!-- admin password -->
+  <section id="screen-admin-pw" class="screen hidden">
+    <div class="panel">
+      <h2 data-i18n="adm_title"></h2>
+      <label class="field"><span data-i18n="adm_pw"></span>
+        <input id="in-admin-pw" type="password" inputmode="numeric" maxlength="12" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="status" id="admin-pw-status"></p>
+      <div class="row">
+        <button id="btn-admin-pw-back" data-i18n="back"></button>
+        <button class="big accent" id="btn-admin-pw-go" data-i18n="adm_enter"></button>
+      </div>
+      <button id="btn-admin-off" class="hidden" data-i18n="adm_offBtn"></button>
     </div>
   </section>
 
@@ -164,6 +184,7 @@
         <button class="big" id="btn-resume" data-i18n="resume"></button>
         <button id="btn-lang-m" class="toggle" data-i18n="langBtn"></button>
         <button id="btn-sound-m" class="toggle"></button>
+        <button id="btn-music-m" class="toggle"></button>
         <button id="btn-speed" class="toggle"></button>
         <button id="btn-pixels-m" class="toggle"></button>
         <button id="btn-help-m" data-i18n="help"></button>

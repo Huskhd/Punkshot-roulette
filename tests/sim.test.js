@@ -1,6 +1,6 @@
 // Plays thousands of bot-vs-bot games through the real rules engine and checks
 // invariants. Run: npm test
-import { Game, MAX_SLOTS, MINIGAME_IDS, redactEvents, mulberry32 } from '../js/engine.js';
+import { Game, MAX_SLOTS, MINIGAME_IDS, MINIGAME_DMG, ITEMS, itemProblem, redactEvents, mulberry32 } from '../js/engine.js';
 import { botAction } from '../js/bot.js';
 
 let failures = 0;
@@ -86,6 +86,53 @@ for (const mode of ['progressive', 'shop']) {
     rows.push(`${a} vs ${b}: ${(winRate(a, b, mode) * 100).toFixed(1)}%`);
   }
   console.log(`[${mode}] ` + rows.join(' | '));
+}
+// ---- targeted rule checks ----
+{
+  assert(MAX_SLOTS === 6, 'six item slots');
+  const tiers = { medkit: 'epic', doll: 'epic', stinktrash: 'rare', insurance: 'legendary', wings: 'legendary', hack: 'rare', handheld: 'epic' };
+  for (const [id, tier] of Object.entries(tiers)) assert(ITEMS[id].tier === tier, `${id} should be ${tier}`);
+  // last life: healing items are refused, and do nothing even if forced
+  const g = new Game({ players: [{ name: 'a' }, { name: 'b' }], hp: 4, itemMode: 'none', seed: 5 });
+  g.start();
+  const p = g.decision.player;
+  g.players[p].hp = 1;
+  for (const id of ['bandage', 'medkit', 'syringe']) assert(itemProblem(g.players, g.shells.length, p, id) === 'lastLife', `${id} blocked on last life`);
+  g.players[p].hp = 2;
+  assert(itemProblem(g.players, g.shells.length, p, 'bandage') === null, 'bandage fine at 2 HP');
+  g.players[p].hp = 1;
+  g.players[p].slots[0] = { uid: 999, id: 'bandage' };
+  assert(g.act(p, { type: 'item', slot: 0 }).error === 'lastLife', 'act refuses healing on last life');
+  // shields still work on the last life
+  g.players[p].shield = 1;
+  g.damage(p, 1, null);
+  assert(g.players[p].alive && g.players[p].hp === 1 && g.players[p].shield === 0, 'shield blocks on last life');
+  // admin tools
+  assert(g.adminGive(p, 'medkit') && g.players[p].slots.some((x) => x && x.id === 'medkit'), 'adminGive');
+  g.adminImmune(p, true);
+  g.ev = [];
+  g.damage(p, 3, null);
+  assert(g.players[p].hp === 1 && g.players[p].alive, 'immune takes no damage');
+  g.adminImmune(p, false);
+  const before = g.decision.player;
+  g.adminSkip();
+  assert(g.decision.kind !== 'turn' || g.decision.player !== before, 'adminSkip moves the turn');
+  const idx = g.adminAddPlayer('c');
+  assert(idx === 2 && g.players.length === 3 && g.knowledge.length === 3, 'adminAddPlayer');
+  g.adminNextShell(true);
+  assert(g.shells.length === 0 || g.shells[0].live === true, 'adminNextShell');
+  // Pocket Duo: losers take MINIGAME_DMG
+  const h = new Game({ players: [{ name: 'a' }, { name: 'b' }], hp: 4, itemMode: 'none', seed: 9 });
+  h.start();
+  const q = h.decision.player;
+  h.players[q].slots[0] = { uid: 998, id: 'handheld' };
+  h.act(q, { type: 'item', slot: 0, pick: 'mash' });
+  assert(h.decision.kind === 'minigame', 'handheld starts a minigame');
+  const sc = [];
+  sc[q] = 50; sc[1 - q] = 10;
+  const r = h.act(q, { type: 'scores', scores: sc });
+  const mg = r.events.find((e) => e.t === 'mgResult');
+  assert(mg && mg.losers[0] === 1 - q && mg.dmg === MINIGAME_DMG && h.players[1 - q].hp === 4 - MINIGAME_DMG, 'minigame losers lose 2 HP');
 }
 const itemUse = Object.keys(allCounts).sort().map((k) => `${k}:${allCounts[k]}`).join(' ');
 console.log('event counts:', itemUse);

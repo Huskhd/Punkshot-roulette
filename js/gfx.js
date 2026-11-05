@@ -38,6 +38,29 @@ export function basic(color, opts) {
 }
 export const OUTLINE = ps1(new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide }));
 
+// Rarity glow: a soft colored "inverted hull" pushed out along the normals and
+// drawn additively behind the item, so only a thin halo shows around its edges.
+const glowMats = [];
+export function glowMat(color) {
+  const k = 'g' + color;
+  if (matCache.has(k)) return matCache.get(k);
+  const m = new THREE.MeshBasicMaterial({ color, side: THREE.BackSide, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uSnap = snapUniform;
+    sh.vertexShader = 'uniform vec2 uSnap;\n' + sh.vertexShader
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += normalize(normal) * 0.0055;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\n{ vec4 sp = gl_Position; if (sp.w > 0.0) { sp.xy = floor(sp.xy / sp.w * uSnap + 0.5) / uSnap * sp.w; gl_Position = sp; } }');
+  };
+  m.userData.base = 0.5;
+  matCache.set(k, m);
+  glowMats.push(m);
+  return m;
+}
+// slow breathing, called once per frame
+export function tickGlow(time) {
+  for (const m of glowMats) m.opacity = m.userData.base * (0.75 + 0.25 * Math.sin(time * 2.4));
+}
+
 // ---------- procedural textures ----------
 export function rand(seed) {
   let s = seed >>> 0;

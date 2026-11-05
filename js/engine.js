@@ -7,8 +7,13 @@
 // act next and what kind of choice it is. Problems are returned as short codes
 // (see i18n.js) so every client can show them in its own language.
 
-export const MAX_SLOTS = 8;
+export const MAX_SLOTS = 6;
 export const MAX_SHELLS = 10;
+
+// Rarity tiers set how often an item shows up and what it costs in the shop.
+export const TIERS = ['common', 'rare', 'epic', 'legendary'];
+const TIER = { rare: { weight: 3, price: 4 }, epic: { weight: 2, price: 5 }, legendary: { weight: 1, price: 6 } };
+const tiered = (tier, extra) => ({ ...TIER[tier], tier, ...extra });
 
 // weight = how often it shows up; price = shop chips.
 export const ITEMS = {
@@ -16,33 +21,38 @@ export const ITEMS = {
   prybar:      { weight: 8, price: 2 },
   saw:         { weight: 7, price: 3 },
   bandage:     { weight: 8, price: 2 },
-  doll:        { weight: 2, price: 5, rare: true },
-  mirror:      { weight: 2, price: 5, rare: true, target: 'player' },
+  doll:        tiered('epic'),
+  mirror:      tiered('rare', { target: 'player' }),
   dice:        { weight: 5, price: 2 },
   glove:       { weight: 5, price: 3, target: 'player' },
   goldglove:   { weight: 3, price: 4, target: 'item' },
   fake:        { weight: 5, price: 2 },
-  insurance:   { weight: 2, price: 5, rare: true },
+  insurance:   tiered('legendary'),
   double:      { weight: 4, price: 3 },
   switch:      { weight: 4, price: 3 },
   syringe:     { weight: 5, price: 2 },
   cuffs:       { weight: 5, price: 3, target: 'player' },
   rotator:     { weight: 3, price: 2 },
   phone:       { weight: 6, price: 2 },
-  medkit:      { weight: 2, price: 5, rare: true },
-  hack:        { weight: 4, price: 3, target: 'player' },
+  medkit:      tiered('epic'),
+  hack:        tiered('rare', { target: 'player' }),
   trash:       { weight: 5, price: 3, target: 'item' },
-  stinktrash:  { weight: 3, price: 4 },
+  stinktrash:  tiered('rare'),
   shield:      { weight: 5, price: 3 },
-  wings:       { weight: 2, price: 5, rare: true, target: 'dead' },
-  handheld:    { weight: 1, price: 6, rare: true, superRare: true },
+  wings:       tiered('legendary', { target: 'dead' }),
+  handheld:    tiered('epic'),
 };
+for (const def of Object.values(ITEMS)) def.tier = def.tier || 'common';
 export const ITEM_IDS = Object.keys(ITEMS);
 
 // Minigames the handheld can launch (see minigames.js for the games themselves).
 export const MINIGAME_IDS = ['mash', 'draw', 'gauge', 'fireflies', 'cups', 'lilypads', 'count', 'bobber'];
 
 export const ITEM_MODES = ['progressive', 'draft', 'shop', 'none'];
+
+// Healing items: they stop working on your last life (1 HP).
+export const HEALS = ['bandage', 'medkit', 'syringe'];
+export const MINIGAME_DMG = 2; // what the bottom half loses to the Pocket Duo
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -65,6 +75,7 @@ export function itemProblem(players, shellsLeft, p, id, target, pick) {
   const me = players[p];
   const others = players.filter((q, i) => i !== p && q.alive);
   if (me.jammed) return 'jammed';
+  if (HEALS.includes(id) && me.hp <= 1) return 'lastLife';
   switch (id) {
     case 'stethoscope': case 'prybar': case 'switch': case 'phone':
       if (shellsLeft < 1) return 'gunEmpty';
@@ -121,14 +132,7 @@ export class Game {
     this.rng = mulberry32((opts.seed ?? Math.floor(Math.random() * 2 ** 32)) >>> 0);
     this.cfg = { hp: opts.hp || 4, itemMode: opts.itemMode || 'progressive' };
     const hp = this.cfg.hp;
-    this.players = opts.players.map((p, i) => ({
-      idx: i, name: p.name, char: p.char ?? i,
-      hp, maxHp: hp, alive: true, shield: 0,
-      slots: Array(MAX_SLOTS).fill(null),
-      cuffed: false, doll: false, saw: false, insured: false, double: false, hacked: false, jammed: false,
-      chips: 0, place: 0, roundDmg: 0,
-      stats: { shots: 0, selfShots: 0, hits: 0, dmgDealt: 0, dmgTaken: 0, itemsUsed: 0, kills: 0, healed: 0 },
-    }));
+    this.players = opts.players.map((p, i) => this.newPlayer(i, p));
     this.round = 0;
     this.shells = []; // index 0 fires next. {id, live}
     this.shellSeq = 1;
@@ -143,6 +147,18 @@ export class Game {
     this.over = false;
     this.winner = -1;
     this.ev = [];
+  }
+
+  newPlayer(i, p) {
+    const hp = this.cfg.hp;
+    return {
+      idx: i, name: p.name, char: p.char ?? i,
+      hp, maxHp: hp, alive: true, shield: 0,
+      slots: Array(MAX_SLOTS).fill(null),
+      cuffed: false, doll: false, saw: false, insured: false, double: false, hacked: false, jammed: false, immune: false,
+      chips: 0, place: 0, roundDmg: 0,
+      stats: { shots: 0, selfShots: 0, hits: 0, dmgDealt: 0, dmgTaken: 0, itemsUsed: 0, kills: 0, healed: 0 },
+    };
   }
 
   // ---------- helpers ----------
@@ -196,7 +212,7 @@ export class Game {
       players: this.players.map((p) => ({
         idx: p.idx, name: p.name, char: p.char, hp: p.hp, maxHp: p.maxHp, alive: p.alive, shield: p.shield,
         slots: p.slots.map((s) => (s ? { ...s } : null)),
-        cuffed: p.cuffed, doll: p.doll, saw: p.saw, insured: p.insured, double: p.double, hacked: p.hacked, jammed: p.jammed,
+        cuffed: p.cuffed, doll: p.doll, saw: p.saw, insured: p.insured, double: p.double, hacked: p.hacked, jammed: p.jammed, immune: p.immune,
         chips: p.chips, place: p.place, stats: { ...p.stats },
       })),
       over: this.over, winner: this.winner,
@@ -412,6 +428,10 @@ export class Game {
 
   damage(i, amount, by) {
     const pl = this.players[i];
+    if (pl.immune) { // admin test mode
+      this.emit({ t: 'damage', player: i, amount: 0, blocked: 0, immune: amount, shield: pl.shield, hp: pl.hp, by });
+      return;
+    }
     let blocked = 0;
     if (pl.shield > 0) { blocked = Math.min(pl.shield, amount); pl.shield -= blocked; amount -= blocked; }
     if (amount > 0) {
@@ -550,7 +570,8 @@ export class Game {
     pl.stats.itemsUsed++;
     const e = { t: 'item', player: p, id: it.id, uid: it.uid, slot };
     const K = this.knowledge[p];
-    const heal = (n) => { const b = pl.hp; pl.hp = Math.min(pl.maxHp, pl.hp + n); pl.stats.healed += pl.hp - b; e.amount = pl.hp - b; e.hp = pl.hp; };
+    // no healing on your last life (itemProblem blocks it; this is the safety net)
+    const heal = (n) => { const b = pl.hp; if (b <= 1) n = 0; pl.hp = Math.min(pl.maxHp, pl.hp + n); pl.stats.healed += pl.hp - b; e.amount = pl.hp - b; e.hp = pl.hp; };
     switch (it.id) {
       case 'stethoscope': {
         const s = this.shells[0];
@@ -670,21 +691,87 @@ export class Game {
     this.decision = { kind: 'turn', player: p };
   }
 
-  // Handheld minigame results: the bottom half (at least one) loses 1 HP.
+  // Handheld minigame results: the bottom half (at least one) loses MINIGAME_DMG HP.
   doScores(scores) {
     const d = this.decision;
     const alive = this.alive().map((q) => q.idx);
     const sc = alive.map((i) => ({ i, s: Number(scores[i]) || 0, r: this.rng() }));
     sc.sort((x, y) => (x.s - y.s) || (x.r - y.r));
     const losers = sc.slice(0, Math.max(1, Math.floor(alive.length / 2))).map((x) => x.i);
-    this.emit({ t: 'mgResult', game: d.game, player: d.player, scores: sc.map((x) => ({ player: x.i, score: x.s })).reverse(), losers });
+    this.emit({ t: 'mgResult', game: d.game, player: d.player, scores: sc.map((x) => ({ player: x.i, score: x.s })).reverse(), losers, dmg: MINIGAME_DMG });
     this.phase = 'turn';
-    for (const l of losers) { if (!this.over) this.damage(l, 1, null); }
+    for (const l of losers) { if (!this.over) this.damage(l, MINIGAME_DMG, null); }
     if (this.over) return;
     if (!this.players[this.turn].alive) { this.afterAction('pass'); return; }
     this.decision = { kind: 'turn', player: this.turn };
   }
 }
+
+// ---------- admin / test tools (local games only, see admin.js) ----------
+// Each returns the events it caused (possibly none); the caller re-syncs the view.
+Object.assign(Game.prototype, {
+  adminGive(i, id) {
+    const pl = this.players[i];
+    const k = firstFree(pl);
+    if (!pl || !pl.alive || k < 0 || !ITEMS[id]) return false;
+    pl.slots[k] = this.newItem(id);
+    return true;
+  },
+  adminClear(i) { this.players[i].slots.fill(null); },
+  adminHeal(i) { const pl = this.players[i]; if (pl.alive && pl.hp < pl.maxHp) pl.hp++; },
+  adminShield(i) { const pl = this.players[i]; if (pl.alive) pl.shield++; },
+  adminImmune(i, on) { this.players[i].immune = !!on; },
+  adminHurt(i) {
+    this.ev = [];
+    const pl = this.players[i];
+    if (this.over || !pl.alive) return [];
+    const was = pl.immune;
+    pl.immune = false;
+    this.damage(i, 1, null);
+    pl.immune = was;
+    if (!this.over) this.adminUnstick();
+    return this.flush();
+  },
+  // if the player we're waiting on just died, move the game along
+  adminUnstick() {
+    const d = this.decision;
+    if (!d || this.players[d.player].alive) return;
+    if (d.kind === 'turn') this.afterAction('pass');
+    else if (d.kind === 'take') this.progDone();
+    else if (d.kind === 'shop') this.shopDone();
+    else if (d.kind === 'draft') { this.ip.picks[d.player] = 0; this.nextDraft(); }
+  },
+  adminSkip() {
+    this.ev = [];
+    if (this.over || !this.decision || this.decision.kind !== 'turn') return [];
+    this.afterAction('pass');
+    return this.flush();
+  },
+  adminNextShell(live) {
+    const s = this.shells[0];
+    if (!s) return false;
+    s.live = !!live;
+    this.knowledge.forEach((k) => k.delete(s.id));
+    return true;
+  },
+  adminReload() {
+    this.ev = [];
+    if (this.over || !this.decision || this.decision.kind !== 'turn') return [];
+    this.shells = [];
+    this.tray = [];
+    this.ip = null;
+    this.endRound();
+    this.startRound();
+    return this.flush();
+  },
+  adminAddPlayer(name) {
+    const i = this.players.length;
+    if (i >= 4) return -1;
+    this.players.push(this.newPlayer(i, { name, char: i }));
+    this.knowledge.push(new Map());
+    return i;
+  },
+});
 
 // Strip private info (stethoscope / phone results) from events for a viewer.
 export function redactEvents(events, viewer) {

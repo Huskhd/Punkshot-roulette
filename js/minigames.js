@@ -23,7 +23,7 @@ const TXT = {
     bobber: ['Steady Bobber', 'The wind pushes the bobber around. Keep it in the green zone with left/right for 8 seconds.'],
   },
   es: {
-    mash: ['Remo Loco', 'Machaca A para remar la canoa. Gana quien dé más remadas en 5 segundos.'],
+    mash: ['Remo Loco', 'Aprieta A sin parar para remar la canoa. Gana quien dé más remadas en 5 segundos.'],
     draw: ['Desenfunda', 'Espera el ¡YA! y presiona A lo más rápido que puedas. Si te adelantas pierdes la ronda. 3 rondas.'],
     gauge: ['Clava la Aguja', 'Detén la aguja en el centro verde con A. 3 intentos, cada uno más rápido.'],
     fireflies: ['Frasco de Luciérnagas', 'Mueve el frasco con la cruceta (o arrastra en la pantalla) y atrapa luciérnagas por 10 segundos.'],
@@ -34,8 +34,8 @@ const TXT = {
   },
 };
 const UI = {
-  en: { pick: 'PICK A GAME', aPick: 'A: choose   B: cancel', ready: 'Press A when ready', go: 'GO!', score: 'SCORE', you: 'You', wait: 'Waiting for the others...', results: 'RESULTS', loses: 'loses 1 HP', tooSoon: 'TOO SOON!', drawGo: 'DRAW!', round: 'Round', tries: 'Try', time: 'TIME', caught: 'CAUGHT', strokes: 'STROKES', howMany: 'How many red?', watch: 'Watch...', yourTurn: 'Your turn!', miss: 'Miss!', hit: 'Got it!', pts: 'pts', plays: 'plays now', aContinue: 'A: continue' },
-  es: { pick: 'ELIGE UN JUEGO', aPick: 'A: elegir   B: cancelar', ready: 'Presiona A cuando estés listo', go: '¡YA!', score: 'PUNTOS', you: 'Tú', wait: 'Esperando a los demás...', results: 'RESULTADOS', loses: 'pierde 1 de vida', tooSoon: '¡MUY PRONTO!', drawGo: '¡YA!', round: 'Ronda', tries: 'Intento', time: 'TIEMPO', caught: 'ATRAPADAS', strokes: 'REMADAS', howMany: '¿Cuántos rojos?', watch: 'Observa...', yourTurn: '¡Tu turno!', miss: '¡Fallaste!', hit: '¡Bien!', pts: 'pts', plays: 'juega ahora', aContinue: 'A: continuar' },
+  en: { pick: 'PICK A GAME', aPick: 'A: choose   B: cancel', ready: 'Press A when ready', go: 'GO!', score: 'SCORE', you: 'You', wait: 'Waiting for the others...', results: 'RESULTS', loses: 'loses 2 HP', tooSoon: 'TOO SOON!', drawGo: 'DRAW!', round: 'Round', tries: 'Try', time: 'TIME', caught: 'CAUGHT', strokes: 'STROKES', howMany: 'How many red?', watch: 'Watch...', yourTurn: 'Your turn!', miss: 'Miss!', hit: 'Got it!', pts: 'pts', plays: 'plays now', aContinue: 'A: continue' },
+  es: { pick: 'ELIGE UN JUEGO', aPick: 'A: elegir   B: cancelar', ready: 'Presiona A cuando estés listo', go: '¡YA!', score: 'PUNTOS', you: 'Tú', wait: 'Esperando a los demás...', results: 'RESULTADOS', loses: 'pierde 2 de vida', tooSoon: '¡MUY PRONTO!', drawGo: '¡YA!', round: 'Ronda', tries: 'Intento', time: 'TIEMPO', caught: 'ATRAPADAS', strokes: 'REMADAS', howMany: '¿Cuántos rojos?', watch: 'Observa...', yourTurn: '¡Tu turno!', miss: '¡Fallaste!', hit: '¡Bien!', pts: 'pts', plays: 'juega ahora', aContinue: 'A: continuar' },
 };
 const u = (k) => UI[getLang()][k];
 export function gameName(id) { return (TXT[getLang()][id] || [id])[0]; }

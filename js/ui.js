@@ -2,8 +2,8 @@
 // Targets (who to shoot, who to use an item on, which of their items) are picked
 // by tapping them at the table; the bar at the bottom only confirms or cancels.
 import { ITEMS, ITEM_IDS, itemProblem, freeSlots } from './engine.js';
-import { sfx } from './audio.js';
-import { t, prob, itemName, itemDesc, charName } from './i18n.js';
+import { sfx, setMusicTension } from './audio.js';
+import { t, prob, itemName, itemDesc, charName, tierName } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -54,6 +54,7 @@ export class UI {
   setLastLife(on) {
     document.body.classList.toggle('lastlife', !!on);
     if (this.view) this.view.lowHp = !!on;
+    setMusicTension(on);
   }
 
   // ---------- screens ----------
@@ -78,7 +79,7 @@ export class UI {
     const turn = s.decision ? s.decision.player : s.turn;
     $('plates').innerHTML = s.players.map((p, i) => {
       const hp = Array.from({ length: p.maxHp }, (_, k) => (k < p.hp ? '▲' : '<span class="off">▲</span>')).join('');
-      const shield = p.shield ? `<span class="sh">${'◆'.repeat(Math.min(p.shield, 6))}</span>` : '';
+      const shield = (p.shield ? `<span class="sh">${'◆'.repeat(Math.min(p.shield, 6))}</span>` : '') + (p.immune ? '<span class="imm">∞</span>' : '');
       const st = [];
       if (p.doll) st.push(this.img('doll', itemName('doll')));
       if (p.saw) st.push(this.img('saw', itemName('saw')));
@@ -104,13 +105,14 @@ export class UI {
   img(id, title) { return this.thumbs[id] ? `<img src="${this.thumbs[id]}" title="${esc(title)}" alt="">` : ''; }
 
   // ---------- item info ----------
-  describe(id) { return `${itemName(id)}: ${itemDesc(id)}`; }
+  describe(id) { const tn = tierName(ITEMS[id].tier); return `${itemName(id)}${tn ? ` (${tn})` : ''}: ${itemDesc(id)}`; }
+  tierTag(id) { const tier = ITEMS[id].tier; return tier !== 'common' ? ` <span class="tier t-${tier}">${esc(tierName(tier))}</span>` : ''; }
   tooltip(pick, x, y, snap) {
     const el = $('tooltip');
     let html = '';
     if (pick && (pick.kind === 'item' || pick.kind === 'tray')) {
       const id = this.idFor(pick, snap);
-      if (id) html = `<b>${esc(itemName(id))}</b><br>${esc(itemDesc(id))}`;
+      if (id) html = `<b>${esc(itemName(id))}</b>${this.tierTag(id)}<br>${esc(itemDesc(id))}`;
     } else if (pick && (pick.kind === 'player' || pick.kind === 'target') && snap) {
       const p = snap.players[pick.idx];
       if (p) html = `<b>${esc(p.name)}</b> — ${esc(charName(p.char))}<br>${esc(t('hpItems', { hp: p.hp, max: p.maxHp, n: p.slots.filter(Boolean).length }))}`;
@@ -197,10 +199,11 @@ export class UI {
         b.onclick = () => this.selectSlot(i);
         items.appendChild(b);
       }
+      // Buttons sit in fixed cells: BACK is always left, USE always right.
       if (r.sel != null && me.slots[r.sel]) {
         const id = me.slots[r.sel].id;
-        btns.append(this.btn(t('back'), '', () => { r.sel = null; this.renderBar(); }), this.btn(t('use', { item: itemName(id) }), 'big accent', () => this.useSelected()));
-      } else btns.append(this.btn(t('pickGun'), 'shootbtn', () => this.beginShoot()));
+        this.cells(btns, [this.btn(t('back'), '', () => { r.sel = null; this.renderBar(); }), this.btn(t('use', { item: itemName(id) }), 'big accent', () => this.useSelected())]);
+      } else this.cells(btns, [this.btn(t('pickGun'), 'shootbtn', () => this.beginShoot())], 2);
       this.measureBar();
       return;
     }
@@ -213,20 +216,26 @@ export class UI {
       b.onclick = () => this.selectTray(x.uid);
       items.appendChild(b);
     }
-    if (r.sel != null) {
-      const x = snap.tray.find((y) => y.uid === r.sel);
-      if (x) {
-        const label = kind === 'shop' ? t('buy', { item: itemName(x.id), price: x.price }) : t('take', { item: itemName(x.id) });
-        btns.append(this.btn(label, 'big accent', () => this.confirmTray(), kind === 'shop' && x.price > me.chips));
-      }
-    }
-    if (kind === 'take' || kind === 'shop') btns.append(this.btn(kind === 'take' ? t('leaveRest') : t('doneShop'), '', () => this.finish({ type: 'done' })));
-    if (kind === 'take') btns.append(this.btn(t('takeNext'), '', () => this.finish({ type: 'take', uid: snap.tray[0].uid })));
+    // the take/buy button is always there (disabled until you pick something), so nothing shifts
+    const x = r.sel != null ? snap.tray.find((y) => y.uid === r.sel) : null;
+    const label = !x ? t('tapItem') : kind === 'shop' ? t('buy', { item: itemName(x.id), price: x.price }) : t('take', { item: itemName(x.id) });
+    const main = this.btn(label, 'big accent', () => this.confirmTray(), !x || (kind === 'shop' && x.price > me.chips));
+    if (kind === 'take') this.cells(btns, [this.btn(t('leaveRest'), '', () => this.finish({ type: 'done' })), this.btn(t('takeNext'), '', () => this.finish({ type: 'take', uid: snap.tray[0].uid })), main]);
+    else if (kind === 'shop') this.cells(btns, [this.btn(t('doneShop'), '', () => this.finish({ type: 'done' })), main]);
+    else this.cells(btns, [main], 2);
     this.measureBar();
+  }
+  // Lays buttons out in equal fixed-width cells. A single button can span `span` cells.
+  cells(el, list, span) {
+    const cols = span || list.length;
+    el.style.setProperty('--cols', cols);
+    if (span) list[0].classList.add('span');
+    el.append(...list);
   }
   itemButton(id, { sel, bad, price }) {
     const b = document.createElement('button');
-    b.className = `itembtn${sel ? ' sel' : ''}${bad ? ' bad' : ''}${ITEMS[id].rare ? ' rare' : ''}`;
+    const tier = ITEMS[id].tier;
+    b.className = `itembtn${sel ? ' sel' : ''}${bad ? ' bad' : ''}${tier !== 'common' ? ` t-${tier}` : ''}`;
     b.innerHTML = `${this.img(id, itemName(id))}<span>${esc(itemName(id))}</span>${price != null ? `<em class="price">${price}¢</em>` : ''}`;
     b.title = itemDesc(id);
     return b;
@@ -343,10 +352,10 @@ export class UI {
       const it = T.sel != null ? snap.players[T.target].slots[T.sel] : null;
       if (it) label = T.id === 'trash' ? t('trashThis', { item: itemName(it.id) }) : t('stealThis', { item: itemName(it.id) });
     }
-    btns.append(
+    this.cells(btns, [
       this.btn(t('cancel'), '', () => { sfx('ui'); this.endTarget(); r.tgt = null; this.clearCaption(); this.renderBar(); }),
       this.btn(label, T.mode === 'shoot' ? 'shootbtn' : 'big accent', () => this.confirmTarget(), T.sel == null),
-    );
+    ]);
   }
   confirmTarget() {
     const r = this.req;
@@ -408,7 +417,7 @@ export class UI {
 
   // ---------- help ----------
   buildHelp() {
-    $('help-items').innerHTML = ITEM_IDS.map((id) => `<div class="hitem">${this.img(id, itemName(id))}<div><b>${esc(itemName(id))}</b>${esc(itemDesc(id))}</div></div>`).join('');
+    $('help-items').innerHTML = ITEM_IDS.map((id) => `<div class="hitem t-${ITEMS[id].tier}">${this.img(id, itemName(id))}<div><b>${esc(itemName(id))}${this.tierTag(id)}</b>${esc(itemDesc(id))}</div></div>`).join('');
   }
 
   // ---------- scoreboard ----------

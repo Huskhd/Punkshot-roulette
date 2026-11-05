@@ -3,11 +3,12 @@ import { TableView } from './table.js';
 import { UI } from './ui.js';
 import { Game, ITEM_IDS, ITEM_MODES, redactEvents } from './engine.js';
 import { botAction, DIFFICULTIES } from './bot.js';
-import { initAudio, sfx, setMuted, isMuted } from './audio.js';
+import { initAudio, sfx, setMuted, isMuted, setMusic, isMusicOn } from './audio.js';
 import { setSpeed, getSpeed, wait } from './gfx.js';
 import { HostNet, ClientNet, cleanCode } from './net.js';
 import { t, getLang, setLang, applyStatic, charName, allCharNames, levelName } from './i18n.js';
 import { Duo, botScore } from './minigames.js';
+import { Admin } from './admin.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -26,7 +27,8 @@ ui.thumbs = view.makeThumbs(ITEM_IDS);
 view.setupDemo();
 
 const app = { session: null, wins: {}, online: null, localSetup: null };
-window.__muckshot = { app, view, ui, duo, setSpeed, startLocal: (s) => startLocal(s) }; // handy for debugging
+const admin = new Admin({ ui, getSession: () => (app.session && app.session.adminQ ? app.session : null) });
+window.__muckshot = { app, view, ui, duo, admin, setSpeed, startLocal: (s) => startLocal(s) }; // handy for debugging
 
 // ---------- language & settings ----------
 let localMode = 'vs';
@@ -60,6 +62,7 @@ for (const [a, b] of [['in-name', 'in-name-online'], ['in-name-online', 'in-name
   $(a).addEventListener('change', () => store.set('name', $(a).value.trim()));
 }
 setMuted(store.get('muted', false));
+setMusic(store.get('music', true));
 setSpeed(store.get('speed', 1));
 view.setRetro(store.get('retro', true));
 function refreshToggles() {
@@ -69,24 +72,39 @@ function refreshToggles() {
   const p = t(view.retro ? 'pixRetro' : 'pixSharp');
   $('btn-pixels-t').textContent = p;
   $('btn-pixels-m').textContent = p;
-  $('btn-speed').textContent = t('speed', { s: getSpeed() });
+  const m = t(isMusicOn() ? 'musicOn' : 'musicOff');
+  $('btn-music-t').textContent = m;
+  $('btn-music-m').textContent = m;
+  // online, only the host sets the speed (everyone's animations must keep pace)
+  const guest = !!(app.online && app.online.role === 'client');
+  $('btn-speed').textContent = t(guest ? 'speedHost' : 'speed', { s: getSpeed() });
+  $('btn-speed').disabled = guest;
 }
 const toggleSound = () => { setMuted(!isMuted()); store.set('muted', isMuted()); refreshToggles(); sfx('ui'); };
+const toggleMusic = () => { setMusic(!isMusicOn()); store.set('music', isMusicOn()); refreshToggles(); };
 const togglePixels = () => { view.setRetro(!view.retro); store.set('retro', view.retro); refreshToggles(); };
 const toggleLang = () => { setLang(getLang() === 'es' ? 'en' : 'es'); applyLang(); };
 $('btn-sound-t').onclick = toggleSound;
 $('btn-sound-m').onclick = toggleSound;
+$('btn-music-t').onclick = toggleMusic;
+$('btn-music-m').onclick = toggleMusic;
 $('btn-pixels-t').onclick = togglePixels;
 $('btn-pixels-m').onclick = togglePixels;
 $('btn-lang-t').onclick = toggleLang;
 $('btn-lang-m').onclick = toggleLang;
 $('btn-speed').onclick = () => {
+  if (app.online && app.online.role === 'client') return;
   const order = [1, 1.5, 2];
   const s = order[(order.indexOf(getSpeed()) + 1) % order.length];
   setSpeed(s);
   store.set('speed', s);
   refreshToggles();
+  if (app.online && app.online.role === 'host') broadcastSpeed();
 };
+function broadcastSpeed() {
+  const O = app.online;
+  O.lobby.players.forEach((p) => { if (p.kind === 'remote' && p.conn) O.net.send(p.conn, { t: 'speed', s: getSpeed() }); });
+}
 
 // Audio can only start after a user gesture.
 document.addEventListener('pointerdown', () => initAudio(), { capture: true });
@@ -139,9 +157,41 @@ async function mgResultsOnDuo(events, names) {
 
 class LocalSession {
   // setup: { players: [{name, ctrl:'human'|'bot', level}], hp, itemMode }
-  constructor(setup) { this.setup = setup; this.stopped = false; }
+  constructor(setup) {
+    this.setup = { ...setup, players: setup.players.map((p) => ({ ...p })) }; // admin can add bots mid-game
+    this.stopped = false;
+    this.adminQ = [];
+    this.solo = false; // admin: play every seat yourself
+  }
   stop() { this.stopped = true; ui.cancelRequest(); if (duo.isOpen) duo.close(); }
   present(events) { return view.play(redactEvents(events, this.viewer), this.game.snapshot()); }
+
+  // ----- admin tools: queued, then applied between moves so animations never overlap -----
+  admin(fn) { this.adminQ.push(fn); if (ui.req) ui.cancelRequest(); }
+  adminAddBot(level, nameFor) {
+    this.admin((g) => {
+      const i = g.players.length;
+      if (i >= 4) return null;
+      const name = uniqueNames([...this.setup.players.map((p) => p.name), nameFor(i)]).pop();
+      g.adminAddPlayer(name);
+      this.setup.players.push({ name, ctrl: 'bot', level });
+      this.players.push({ name, char: i });
+      ui.toast(t('adm_joined', { n: name }));
+      return 'rebuild';
+    });
+  }
+  async flushAdmin() {
+    while (this.adminQ.length && !this.stopped) {
+      const fn = this.adminQ.shift();
+      let ev = null;
+      try { ev = fn(this.game); } catch (err) { console.error(err); }
+      if (ev === 'rebuild') { view.setup(this.players, this.viewer, this.game.snapshot()); continue; }
+      if (ev && ev.length) await this.present(ev);
+      else if (ev) view.sync(this.game.snapshot());
+    }
+    admin.refresh();
+  }
+
   async minigame(d) {
     const S = this.setup;
     const scores = [];
@@ -162,6 +212,7 @@ class LocalSession {
   async run() {
     const S = this.setup;
     const players = S.players.map((p, i) => ({ name: p.name, char: i }));
+    this.players = players;
     const game = new Game({ players, hp: S.hp, itemMode: S.itemMode });
     this.game = game;
     const humans = S.players.map((p, i) => (p.ctrl === 'human' ? i : -1)).filter((i) => i >= 0);
@@ -169,28 +220,32 @@ class LocalSession {
     view.setup(players, this.viewer, game.snapshot());
     ui.hideScreens();
     ui.showHud(true);
+    admin.refresh();
     await this.present(game.start());
     let lastTurnHuman = this.viewer;
     let streak = 0;
     while (!game.over && !this.stopped) {
+      if (this.adminQ.length) { await this.flushAdmin(); continue; }
       const d = game.decision;
       const sp = S.players[d.player];
+      const ctrl = this.solo ? 'human' : sp.ctrl;
       let action = null;
       if (d.kind === 'minigame') {
         const scores = await this.minigame(d);
         if (!scores || this.stopped) return;
         const r = game.act(d.player, { type: 'scores', scores });
-        await mgResultsOnDuo(r.events, players.map((p) => p.name));
+        await mgResultsOnDuo(r.events, this.players.map((p) => p.name));
         await this.present(r.events);
         continue;
       }
-      if (sp.ctrl === 'bot') {
+      if (ctrl === 'bot') {
         await wait(d.kind === 'turn' ? 0.8 : 0.35);
         if (this.stopped) return;
+        if (this.adminQ.length) continue; // admin changed something while it was thinking
         action = botAction(game, d.player, sp.level);
         if (d.kind === 'turn' && action && action.type === 'item') { if (++streak > 10) action = { type: 'shoot', target: d.player }; } else streak = 0;
       } else {
-        if (d.kind === 'turn' && humans.length > 1 && d.player !== lastTurnHuman) {
+        if (d.kind === 'turn' && humans.length > 1 && !this.solo && d.player !== lastTurnHuman) {
           await ui.passScreen(sp.name);
           lastTurnHuman = d.player;
         }
@@ -200,12 +255,12 @@ class LocalSession {
           await view.setViewer(d.player);
           view.sync(game.snapshot());
         }
-        action = await ui.requestAction(game.snapshot(), d.player, humans.length > 1 ? sp.name : null);
+        action = await ui.requestAction(game.snapshot(), d.player, humans.length > 1 || this.solo ? sp.name : null);
         if (!action) { if (this.stopped) return; continue; }
       }
       const r = game.act(d.player, action);
       if (r.error) {
-        if (sp.ctrl === 'human') { ui.say(t('prob_' + r.error, { n: '' }), 2.5); continue; }
+        if (ctrl === 'human') { ui.say(t('prob_' + r.error, { n: '' }), 2.5); continue; }
         const fb = game.act(d.player, d.kind === 'turn' ? { type: 'shoot', target: d.player } : { type: 'done' });
         if (!fb.error) await this.present(fb.events);
         continue;
@@ -213,6 +268,7 @@ class LocalSession {
       await this.present(r.events);
     }
     if (this.stopped) return;
+    admin.refresh();
     finishGame(game.snapshot(), true, '');
   }
 }
@@ -233,12 +289,16 @@ async function startLocal(setup) {
 }
 function stopSession() {
   if (app.session) { app.session.stop(); app.session = null; }
+  admin.refresh();
   ui.cancelRequest();
   if (duo.isOpen) duo.close();
 }
 function toTitle() {
   stopSession();
   if (app.online) { app.online.net.close(); app.online = null; }
+  setSpeed(store.get('speed', 1)); // a host may have changed it for us
+  refreshToggles();
+  admin.refresh();
   ui.showHud(false);
   ui.black(false);
   view.setupDemo();
@@ -531,7 +591,8 @@ class HostSession {
     const i = this.seats().findIndex((p) => p.kind === 'remote' && p.conn === conn);
     if (i < 0 || !this.game) return;
     const snap = this.game.snapshot();
-    if (!inGame) this.O.net.send(conn, { t: 'start', players: this.players, you: i, pre: snap });
+    if (!inGame) this.O.net.send(conn, { t: 'start', players: this.players, you: i, pre: snap, speed: getSpeed() });
+    else this.O.net.send(conn, { t: 'speed', s: getSpeed() });
     this.O.net.send(conn, { t: 'state', snap, seq: this.seq });
   }
   onRemoteLeave(i) {
@@ -551,7 +612,7 @@ class HostSession {
     const game = new Game({ players, hp: this.O.lobby.hp, itemMode: this.O.lobby.itemMode });
     this.game = game;
     const pre = game.snapshot();
-    seats.forEach((p, i) => { if (p.kind === 'remote' && p.conn) this.O.net.send(p.conn, { t: 'start', players, you: i, pre }); });
+    seats.forEach((p, i) => { if (p.kind === 'remote' && p.conn) this.O.net.send(p.conn, { t: 'start', players, you: i, pre, speed: getSpeed() }); });
     view.setup(players, 0, pre);
     ui.hideScreens();
     ui.showHud(true);
@@ -618,6 +679,7 @@ $('btn-join').onclick = async () => {
   try {
     const welcome = await net.join(code, myName());
     app.online = { role: 'client', net, code, lobby: null, myName: welcome.name || myName(), session: null };
+    refreshToggles();
     app.wins = {};
     net.onMsg = (msg) => clientMsg(msg);
     net.onClose = () => { if (app.online && app.online.net === net) { ui.toast(t('t_hostLost'), 3500); toTitle(); } };
@@ -641,7 +703,11 @@ function clientMsg(msg) {
       O.code = msg.code || O.code;
       if (!O.session) renderLobby();
       break;
+    case 'speed':
+      if (typeof msg.s === 'number' && msg.s >= 0.5 && msg.s <= 3 && msg.s !== getSpeed()) { setSpeed(msg.s); refreshToggles(); ui.toast(t('t_speed', { s: msg.s })); }
+      break;
     case 'start':
+      if (typeof msg.speed === 'number' && msg.speed >= 0.5 && msg.speed <= 3) setSpeed(msg.speed);
       stopSession();
       O.session = new ClientSession(O, msg);
       app.session = O.session;

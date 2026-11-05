@@ -1,7 +1,8 @@
 // Muckshot — every model is built in code from basic shapes.
 // Swap any make*() function for a loaded CC0 model later if you like: callers
 // only rely on the returned Group (and the userData hooks documented below).
-import { THREE, lam, basic, OUTLINE, planksTex, noiseTex, tableTopTex, canvasTex, rand } from './gfx.js';
+import { THREE, lam, basic, OUTLINE, planksTex, noiseTex, tableTopTex, canvasTex, rand, glowMat } from './gfx.js';
+import { ITEMS } from './engine.js';
 
 export const TABLE_Y = 0.9;
 export const TABLE_R = 1.75;
@@ -520,7 +521,11 @@ function gloveModel(color, emissive) {
   return g;
 }
 
-export function makeItem(id) {
+// Rare / epic / legendary items get a faint colored halo (see glowMat).
+export const itemTier = (id) => (ITEMS[id] && ITEMS[id].tier) || 'common';
+const TIER_GLOW = { rare: 0x3d8bff, epic: 0xb455ff, legendary: 0xffb22e };
+
+export function makeItem(id, { glow = true } = {}) {
   const g = new THREE.Group();
   const chrome = lam(0xa8aeb4), black = lam(0x1a1a1a);
   switch (id) {
@@ -567,18 +572,31 @@ export function makeItem(id) {
       break;
     }
     case 'bandage': {
-      const tan = lam(0xd9a875), pad = lam(0xf4eee2);
-      for (const [rot, y] of [[0.7, 0.003], [-0.7, 0.008]]) {
-        const strip = new THREE.Group();
-        strip.add(put(box(0.15, 0.004, 0.038, tan), 0, 0, 0));
-        strip.add(put(cyl(0.019, 0.019, 0.004, 8, tan), 0.075, 0, 0));
-        strip.add(put(cyl(0.019, 0.019, 0.004, 8, tan), -0.075, 0, 0));
-        strip.add(put(box(0.05, 0.006, 0.028, pad), 0, 0.001, 0));
-        for (const x of [-0.05, -0.035, 0.035, 0.05]) strip.add(put(box(0.004, 0.005, 0.004, lam(0xa87a50)), x, 0.001, 0.008));
-        strip.position.y = y;
-        strip.rotation.y = rot;
-        g.add(strip);
-      }
+      // a rolled-up bandage held shut by a red strap, with the loose end trailing out
+      const cloth = lam(0xffffff, { map: noiseTex(0xeee6d2, { amt: 0.12, w: 8, h: 8, seed: 44 }) });
+      const ends = lam(0xffffff, {
+        map: canvasTex(16, 16, (gc) => {
+          gc.fillStyle = '#eee6d2';
+          gc.fillRect(0, 0, 16, 16);
+          gc.strokeStyle = '#b8ab8e';
+          gc.lineWidth = 1;
+          for (let r = 2; r < 8; r += 2) { gc.beginPath(); gc.arc(8, 8, r, 0, Math.PI * 2); gc.stroke(); }
+          gc.fillStyle = '#8a7e66';
+          gc.fillRect(7, 7, 2, 2);
+        }),
+      });
+      const red = lam(0xc4262c, { emissive: 0x2a0404 });
+      const b = new THREE.Group();
+      b.rotation.y = 0.5; // turned a bit so the rolled-up end shows
+      g.add(b);
+      const roll = mesh(new THREE.CylinderGeometry(0.036, 0.036, 0.08, 12), [cloth, ends, ends]);
+      b.add(put(roll, 0, 0.036, -0.008, 0, 0, Math.PI / 2));
+      b.add(put(cyl(0.0385, 0.0385, 0.024, 12, red), 0, 0.036, -0.008, 0, 0, Math.PI / 2));
+      b.add(put(box(0.024, 0.008, 0.016, red), 0, 0.074, -0.008)); // the strap's buckle
+      b.add(put(box(0.012, 0.004, 0.02, lam(0x8a1418)), 0, 0.079, -0.008));
+      // loose end: lies flat on the table, curling up a little at the tip
+      b.add(put(box(0.074, 0.003, 0.05, cloth), 0, 0.0015, 0.045));
+      b.add(put(box(0.074, 0.003, 0.018, cloth), 0, 0.006, 0.076, -0.5, 0, 0));
       break;
     }
     case 'doll': {
@@ -609,7 +627,6 @@ export function makeItem(id) {
       m.rotation.x = -0.35;
       g.add(m);
       g.add(put(box(0.03, 0.012, 0.02, gold), 0, 0.006, 0.02));
-      g.userData.rare = true;
       break;
     }
     case 'dice': {
@@ -624,7 +641,7 @@ export function makeItem(id) {
       break;
     }
     case 'glove': g.add(gloveModel(0x6a4a2e)); break;
-    case 'goldglove': g.add(gloveModel(0xd8b040, 0x8a6a10)); g.userData.rare = true; break;
+    case 'goldglove': g.add(gloveModel(0xd8b040, 0x8a6a10)); break;
     case 'fake': {
       const s = makeShell(false);
       s.children[0].material = lam(0x6f7d62);
@@ -650,7 +667,6 @@ export function makeItem(id) {
       g.add(put(box(0.1, 0.004, 0.13, paper), 0, 0.004, 0, 0, 0.15, 0));
       g.add(put(box(0.1, 0.004, 0.13, lam(0xd8d0b8)), 0.008, 0.001, 0.006, 0, 0.25, 0));
       g.add(put(cyl(0.016, 0.016, 0.008, 8, lam(0xb01818, { emissive: 0x500000 })), 0.025, 0.01, 0.04));
-      g.userData.rare = true;
       break;
     }
     case 'double': {
@@ -717,7 +733,6 @@ export function makeItem(id) {
       g.add(put(box(0.05, 0.006, 0.016, red), 0, 0.072, 0));
       g.add(put(box(0.016, 0.006, 0.05, red), 0, 0.072, 0));
       g.add(put(box(0.04, 0.012, 0.01, lam(0x333333)), 0, 0.078, -0.03)); // handle
-      g.userData.rare = true;
       break;
     }
     case 'hack': {
@@ -759,10 +774,9 @@ export function makeItem(id) {
       sh.add(put(torus(0.06, 0.007, 4, 14, Math.PI * 2, lam(0xb8bec4)), 0, 0, 0, Math.PI / 2, 0, 0));
       sh.add(put(sph(0.016, 6, 5, lam(0xc8d4e0)), 0, 0.008, 0));
       sh.add(put(box(0.008, 0.004, 0.1, lam(0xb8bec4)), 0, 0.007, 0));
-      sh.rotation.x = -1.1;
-      sh.position.y = 0.055;
+      sh.rotation.x = 1.0; // face toward its owner, leaning back
+      sh.position.y = 0.052;
       g.add(sh);
-      g.add(put(box(0.03, 0.01, 0.02, lam(0x5a3a1e)), 0, 0.005, 0.03));
       break;
     }
     case 'wings': {
@@ -774,7 +788,6 @@ export function makeItem(id) {
         g.add(w);
       }
       g.add(put(torus(0.028, 0.004, 4, 14, Math.PI * 2, lam(0xe8c040, { emissive: 0x806010 })), 0, 0.1, 0, Math.PI / 2, 0, 0));
-      g.userData.rare = true;
       break;
     }
     case 'handheld': {
@@ -793,7 +806,6 @@ export function makeItem(id) {
       top.position.set(0, 0.012, -0.035);
       top.rotation.x = -0.3;
       g.add(top);
-      g.userData.rare = true;
       break;
     }
     default:
@@ -801,5 +813,22 @@ export function makeItem(id) {
   }
   g.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
   g.userData.itemId = id;
+  const tier = ITEMS[id] && ITEMS[id].tier;
+  if (glow && TIER_GLOW[tier]) addGlow(g, TIER_GLOW[tier]);
   return g;
+}
+
+function addGlow(g, color) {
+  const meshes = [];
+  g.traverse((o) => { if (o.isMesh && o.visible && !(o.material && o.material.transparent)) meshes.push(o); });
+  const mat = glowMat(color);
+  for (const o of meshes) {
+    const h = new THREE.Mesh(o.geometry, mat);
+    h.castShadow = false;
+    h.receiveShadow = false;
+    h.raycast = () => {};
+    h.renderOrder = 1;
+    h.userData.glow = true;
+    o.add(h);
+  }
 }
