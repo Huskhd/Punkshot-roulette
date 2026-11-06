@@ -11,36 +11,45 @@ export const MAX_SLOTS = 6;
 export const MAX_SHELLS = 10;
 
 // Rarity tiers set how often an item shows up and what it costs in the shop.
-export const TIERS = ['common', 'rare', 'epic', 'legendary'];
-const TIER = { rare: { weight: 3, price: 4 }, epic: { weight: 2, price: 5 }, legendary: { weight: 1, price: 6 } };
+export const TIERS = ['common', 'rare', 'epic', 'legendary', 'mythic'];
+// Per-item weights for the higher tiers. Commons have their own weights (3-7), 70 in total,
+// so a single draw is roughly: common 80%, rare 11.4%, epic 4.6%, legendary 3.2%, mythic 0.7%.
+const TIER = {
+  rare: { weight: 2.5, price: 4 },
+  epic: { weight: 2, price: 5 },
+  legendary: { weight: 0.7, price: 6 },
+  mythic: { weight: 0.3, price: 8 },
+};
 const tiered = (tier, extra) => ({ ...TIER[tier], tier, ...extra });
 
 // weight = how often it shows up; price = shop chips.
 export const ITEMS = {
-  stethoscope: { weight: 9, price: 2 },
-  prybar:      { weight: 8, price: 2 },
-  saw:         { weight: 7, price: 3 },
-  bandage:     { weight: 8, price: 2 },
-  doll:        tiered('epic'),
+  stethoscope: tiered('rare'),
+  prybar:      { weight: 7, price: 2 },
+  saw:         { weight: 6, price: 3 },
+  bandage:     { weight: 7, price: 2 },
+  doll:        tiered('legendary'),
   mirror:      tiered('rare', { target: 'player' }),
   dice:        { weight: 5, price: 2 },
   glove:       { weight: 5, price: 3, target: 'player' },
-  goldglove:   { weight: 3, price: 4, target: 'item' },
+  goldglove:   tiered('epic', { target: 'item' }),
   fake:        { weight: 5, price: 2 },
-  insurance:   tiered('legendary'),
+  insurance:   tiered('mythic'),
   double:      { weight: 4, price: 3 },
   switch:      { weight: 4, price: 3 },
   syringe:     { weight: 5, price: 2 },
-  cuffs:       { weight: 5, price: 3, target: 'player' },
+  cuffs:       { weight: 4, price: 3, target: 'player' },
   rotator:     { weight: 3, price: 2 },
   phone:       { weight: 6, price: 2 },
-  medkit:      tiered('epic'),
+  medkit:      tiered('legendary'),
   hack:        tiered('rare', { target: 'player' }),
   trash:       { weight: 5, price: 3, target: 'item' },
   stinktrash:  tiered('rare'),
-  shield:      { weight: 5, price: 3 },
+  shield:      { weight: 4, price: 3 },
   wings:       tiered('legendary', { target: 'dead' }),
-  handheld:    tiered('epic'),
+  handheld:    tiered('legendary'),
+  adrenaline:  tiered('epic'),
+  joker:       tiered('mythic'),
 };
 for (const def of Object.values(ITEMS)) def.tier = def.tier || 'common';
 export const ITEM_IDS = Object.keys(ITEMS);
@@ -48,20 +57,23 @@ export const ITEM_IDS = Object.keys(ITEMS);
 // Minigames the handheld can launch (see minigames.js for the games themselves).
 export const MINIGAME_IDS = ['mash', 'draw', 'gauge', 'fireflies', 'cups', 'lilypads', 'count', 'bobber'];
 
-export const ITEM_MODES = ['progressive', 'draft', 'shop', 'none'];
+// 'duo' = everyone gets a Pocket Duo every round and nothing else; 'none' = Classic (gun and shells only).
+export const ITEM_MODES = ['progressive', 'draft', 'shop', 'duo', 'none'];
 
 // Healing items: they stop working on your last life (1 HP).
 export const HEALS = ['bandage', 'medkit', 'syringe'];
 export const MINIGAME_DMG = 2; // what the bottom half loses to the Pocket Duo
-export const MINIGAME_HEAL = 2; // what the Pocket Duo's owner heals if they come first
+export const MINIGAME_HEAL = 2; // what the Pocket Duo's owner heals if they come first (even on the last life)
 export const INSURANCE_ROUNDS = 3; // Life Insurance covers this many rounds (magazines), the current one included
-export const MAX_PER_ROUND = 5; // most items handed out per round
+export const MAX_PER_ROUND = 3; // most items handed out per round
+export const HANDOUT_CAP = 4; // handouts stop topping you up once you hold this many
+export const TEMP_HP = 8; // Adrenaline's temporary HP (loses 1 at the start of every turn)
+export const JOKER_ROUNDS = 2; // rounds without item handouts after a Joker
 
-// Rarity drifts down a stage as the game goes on: by DRIFT_ROUNDS rounds after
-// items start, legendary items are as common as epic ones were, epic as rare,
-// and rare almost as common (still a bit rarer than the average common item).
-const DRIFT_TO = { rare: 4, epic: 3, legendary: 2 };
-const DRIFT_ROUNDS = 6;
+// Rarity drifts a little as the game goes on: by DRIFT_ROUNDS rounds after items
+// start, each higher tier is about halfway to the weight of the tier below it.
+const DRIFT_TO = { rare: 3.5, epic: 2.8, legendary: 1.1, mythic: 0.5 };
+const DRIFT_ROUNDS = 8;
 export function rarityDrift(round) { return Math.max(0, Math.min(1, (round - 2) / DRIFT_ROUNDS)); }
 export function itemWeight(id, round = 1) {
   const def = ITEMS[id];
@@ -117,8 +129,14 @@ export function itemProblem(players, shellsLeft, p, id, target, pick) {
       if (total <= 1) return 'nothingToTake'; // only the trash can itself
       break;
     }
-    case 'cuffs': if (!others.some((q) => !q.cuffed)) return 'allCuffed'; break;
-    case 'hack': if (!others.some((q) => !q.hacked)) return 'allHacked'; break;
+    case 'cuffs':
+      if (!others.some((q) => !q.cuffed && !q.cuffSafe)) return others.some((q) => q.cuffSafe) ? 'cuffCooldown' : 'allCuffed';
+      break;
+    case 'hack':
+      if (!others.some((q) => !q.hacked && !q.jammed && !q.hackSafe)) return others.some((q) => q.hackSafe && !q.hacked && !q.jammed) ? 'hackCooldown' : 'allHacked';
+      break;
+    case 'adrenaline': if ((me.temp || 0) >= TEMP_HP) return 'tempFull'; break;
+    case 'joker': break;
     case 'wings': if (!players.some((q) => !q.alive)) return 'noDead'; break;
     case 'handheld': if (pick == null || !MINIGAME_IDS.includes(pick)) return 'NEED_PICK'; break;
   }
@@ -132,7 +150,9 @@ export function itemProblem(players, shellsLeft, p, id, target, pick) {
     const t = players[target];
     if (!t || !t.alive || target === p) return 'badTarget';
     if (id === 'cuffs' && t.cuffed) return 'alreadyCuffed';
-    if (id === 'hack' && t.hacked) return 'alreadyHacked';
+    if (id === 'cuffs' && t.cuffSafe) return 'cuffCooldown';
+    if (id === 'hack' && (t.hacked || t.jammed)) return 'alreadyHacked';
+    if (id === 'hack' && t.hackSafe) return 'hackCooldown';
     if ((id === 'glove' || id === 'goldglove' || id === 'trash') && !t.slots.some(Boolean)) return 'targetEmpty';
     if (id === 'goldglove' || id === 'trash') {
       if (pick == null) return 'NEED_PICK';
@@ -142,7 +162,11 @@ export function itemProblem(players, shellsLeft, p, id, target, pick) {
   return null;
 }
 
-export function itemsForRound(round) { return round < 2 ? 0 : Math.min(round, MAX_PER_ROUND); }
+// Items handed out per round: none in round 1, then 1, 2, 2, 3, 3, 3...
+const PER_ROUND = [0, 0, 1, 2, 2];
+export function itemsForRound(round) { return round < PER_ROUND.length ? PER_ROUND[Math.max(0, round)] : MAX_PER_ROUND; }
+// ...and fewer for whoever is already well stocked (nothing at HANDOUT_CAP items or more).
+export function handoutFor(pl, round) { return Math.max(0, Math.min(itemsForRound(round), HANDOUT_CAP - pl.slots.filter(Boolean).length)); }
 
 export class Game {
   // opts: { players: [{name, char}], hp, itemMode, seed }
@@ -164,6 +188,7 @@ export class Game {
     this.knowledge = this.players.map(() => new Map()); // shell id -> live, per player
     this.over = false;
     this.winner = -1;
+    this.itemBan = 0; // rounds left without item handouts (Joker)
     this.ev = [];
   }
 
@@ -174,6 +199,7 @@ export class Game {
       hp, maxHp: hp, alive: true, shield: 0,
       slots: Array(MAX_SLOTS).fill(null),
       cuffed: false, doll: false, saw: false, insured: 0, double: false, hacked: false, jammed: false, immune: false,
+      cuffSafe: false, hackSafe: false, temp: 0,
       chips: 0, place: 0, roundDmg: 0,
       stats: { shots: 0, selfShots: 0, hits: 0, dmgDealt: 0, dmgTaken: 0, itemsUsed: 0, kills: 0, healed: 0 },
     };
@@ -210,6 +236,7 @@ export class Game {
     return arr;
   }
   rollItem() {
+    if (this.cfg.itemMode === 'duo') return 'handheld';
     const twoLeft = this.alive().length <= 2;
     const pool = ITEM_IDS.filter((id) => !(twoLeft && id === 'rotator'));
     const w = pool.map((id) => itemWeight(id, this.round));
@@ -225,13 +252,14 @@ export class Game {
   snapshot() {
     return {
       round: this.round, dir: this.dir, turn: this.turn, phase: this.phase,
-      shellsLeft: this.shells.length, itemMode: this.cfg.itemMode,
+      shellsLeft: this.shells.length, itemMode: this.cfg.itemMode, itemBan: this.itemBan,
       decision: this.decision ? { ...this.decision } : null,
       tray: this.tray.map((t) => ({ ...t })),
       players: this.players.map((p) => ({
         idx: p.idx, name: p.name, char: p.char, hp: p.hp, maxHp: p.maxHp, alive: p.alive, shield: p.shield,
         slots: p.slots.map((s) => (s ? { ...s } : null)),
         cuffed: p.cuffed, doll: p.doll, saw: p.saw, insured: p.insured, double: p.double, hacked: p.hacked, jammed: p.jammed, immune: p.immune,
+        cuffSafe: p.cuffSafe, hackSafe: p.hackSafe, temp: p.temp,
         chips: p.chips, place: p.place, stats: { ...p.stats },
       })),
       over: this.over, winner: this.winner,
@@ -269,18 +297,39 @@ export class Game {
   startItemPhase() {
     const n = itemsForRound(this.round);
     const mode = this.cfg.itemMode;
-    if (n === 0 || mode === 'none') { this.beginTurns(); return; }
+    if (mode === 'none') { this.beginTurns(); return; }
+    if (this.itemBan > 0) {
+      this.itemBan--;
+      this.emit({ t: 'itemBan', left: this.itemBan });
+      this.beginTurns();
+      return;
+    }
     const order = this.orderFrom(this.turn);
+    if (mode === 'duo') { // one Pocket Duo each, every round, straight to your side of the table
+      order.forEach((p) => {
+        const pl = this.players[p];
+        const slot = firstFree(pl);
+        if (slot < 0) return;
+        const it = this.newItem('handheld');
+        pl.slots[slot] = it;
+        this.emit({ t: 'take', player: p, uid: it.uid, id: it.id, slot, gift: true });
+      });
+      this.beginTurns();
+      return;
+    }
+    if (n === 0) { this.beginTurns(); return; }
     this.phase = 'items';
     if (mode === 'progressive') {
       this.ip = { mode, order, i: 0, n };
       this.nextProgressive();
     } else if (mode === 'draft') {
       // shared pool with a few spare items, so even the last picker has a choice
-      this.tray = [];
-      for (let k = 0; k < n * order.length + order.length; k++) this.tray.push(this.newItem(this.rollItem()));
       const picks = {};
-      order.forEach((p) => { picks[p] = n; });
+      order.forEach((p) => { picks[p] = handoutFor(this.players[p], this.round); });
+      const total = order.reduce((sum, p) => sum + picks[p], 0);
+      if (total === 0) { this.beginTurns(); return; }
+      this.tray = [];
+      for (let k = 0; k < total + order.length; k++) this.tray.push(this.newItem(this.rollItem()));
       this.ip = { mode, order, cursor: 0, picks, n };
       this.emit({ t: 'tray', mode, player: -1, items: this.tray.map((x) => ({ ...x })), picks: n, order });
       this.nextDraft();
@@ -301,10 +350,17 @@ export class Game {
     while (ip.i < ip.order.length) {
       const p = ip.order[ip.i];
       const pl = this.players[p];
+      const give = handoutFor(pl, this.round);
+      if (!pl.alive || give === 0) { // well stocked: nothing this round
+        if (pl.alive) this.emit({ t: 'stocked', player: p });
+        ip.i++;
+        continue;
+      }
       this.tray = [];
-      for (let k = 0; k < ip.n; k++) this.tray.push(this.newItem(this.rollItem()));
-      this.emit({ t: 'tray', mode: 'progressive', player: p, items: this.tray.map((x) => ({ ...x })), order: ip.i === 0 ? ip.order : undefined });
-      if (!pl.alive || freeSlots(pl) === 0) { this.endTray('full'); ip.i++; continue; }
+      for (let k = 0; k < give; k++) this.tray.push(this.newItem(this.rollItem()));
+      const order = ip.shown ? undefined : ip.order;
+      ip.shown = true;
+      this.emit({ t: 'tray', mode: 'progressive', player: p, items: this.tray.map((x) => ({ ...x })), order });
       this.decision = { kind: 'take', player: p };
       return;
     }
@@ -404,6 +460,7 @@ export class Game {
       if (!pl.alive) { this.turn = this.nextAlive(this.turn); continue; }
       if (pl.cuffed) {
         pl.cuffed = false;
+        pl.cuffSafe = true; // can't be cuffed again until they've had a real turn
         this.emit({ t: 'cuffSkip', player: this.turn });
         this.turn = this.nextAlive(this.turn);
         continue;
@@ -411,12 +468,17 @@ export class Game {
       break;
     }
     const pl = this.players[this.turn];
-    this.emit({ t: 'turn', player: this.turn, shellsLeft: this.shells.length });
+    // Adrenaline wears off: every turn, everyone's temporary HP drops by 1
+    const decay = [];
+    this.players.forEach((q) => { if (q.alive && q.temp > 0) { q.temp--; decay.push({ player: q.idx, temp: q.temp }); } });
+    pl.cuffSafe = false;
+    this.emit({ t: 'turn', player: this.turn, shellsLeft: this.shells.length, decay: decay.length ? decay : undefined });
     if (pl.hacked) {
       pl.hacked = false;
       pl.jammed = true;
+      pl.hackSafe = true; // and can't be hacked again until their next (free) turn
       this.emit({ t: 'jammed', player: this.turn });
-    }
+    } else pl.hackSafe = false;
     this.decision = { kind: 'turn', player: this.turn };
   }
 
@@ -457,8 +519,9 @@ export class Game {
       this.emit({ t: 'damage', player: i, amount: 0, blocked: 0, immune: amount, shield: pl.shield, hp: pl.hp, by });
       return;
     }
-    let blocked = 0;
+    let blocked = 0, absorbed = 0;
     if (pl.shield > 0) { blocked = Math.min(pl.shield, amount); pl.shield -= blocked; amount -= blocked; }
+    if (pl.temp > 0 && amount > 0) { absorbed = Math.min(pl.temp, amount); pl.temp -= absorbed; amount -= absorbed; }
     if (amount > 0) {
       pl.hp -= amount;
       pl.stats.dmgTaken += amount;
@@ -468,12 +531,12 @@ export class Game {
         sh.roundDmg += amount;
       }
     }
-    this.emit({ t: 'damage', player: i, amount, blocked, shield: pl.shield, hp: Math.max(0, pl.hp), by });
+    this.emit({ t: 'damage', player: i, amount, blocked, absorbed, temp: pl.temp, shield: pl.shield, hp: Math.max(0, pl.hp), by });
     if (pl.hp > 0) return;
     if (pl.insured) {
       pl.insured = 0;
-      pl.hp = 1;
-      this.emit({ t: 'revive', player: i, hp: 1, via: 'insurance' });
+      pl.hp = pl.maxHp; // the policy pays out in full
+      this.emit({ t: 'revive', player: i, hp: pl.hp, via: 'insurance' });
       return;
     }
     const w = pl.slots.findIndex((s) => s && s.id === 'wings');
@@ -486,8 +549,9 @@ export class Game {
     }
     pl.hp = 0;
     pl.alive = false;
-    pl.cuffed = pl.doll = pl.hacked = pl.jammed = false;
+    pl.cuffed = pl.doll = pl.hacked = pl.jammed = pl.cuffSafe = pl.hackSafe = false;
     pl.insured = 0;
+    pl.temp = 0;
     const aliveCount = this.alive().length;
     pl.place = aliveCount + 1;
     if (by != null && by !== i) this.players[by].stats.kills++;
@@ -684,6 +748,23 @@ export class Game {
         break;
       }
       case 'cuffs': this.players[target].cuffed = true; e.target = target; break;
+      case 'adrenaline': pl.temp = TEMP_HP; e.temp = pl.temp; break;
+      case 'joker': {
+        // every item on the table is gone, no handouts for a while, and your HP matches the leader's
+        const removed = [];
+        this.players.forEach((q) => q.slots.forEach((x, k) => {
+          if (!x) return;
+          removed.push({ player: q.idx, slot: k, uid: x.uid, id: x.id });
+          q.slots[k] = null;
+        }));
+        this.itemBan = JOKER_ROUNDS;
+        const top = Math.max(...this.alive().map((q) => q.hp));
+        const b = pl.hp;
+        pl.hp = Math.min(pl.maxHp, Math.max(pl.hp, top));
+        if (pl.hp > b) pl.stats.healed += pl.hp - b;
+        Object.assign(e, { removed, hp: pl.hp, amount: pl.hp - b, ban: JOKER_ROUNDS });
+        break;
+      }
       case 'hack': this.players[target].hacked = true; e.target = target; break;
       case 'rotator': this.dir = -this.dir; e.dir = this.dir; break;
       case 'phone': {
@@ -729,9 +810,9 @@ export class Game {
     const owner = this.players[d.player];
     if (sc[sc.length - 1].i === d.player && owner.alive) {
       const b = owner.hp;
-      if (b > 1) owner.hp = Math.min(owner.maxHp, owner.hp + MINIGAME_HEAL);
+      owner.hp = Math.min(owner.maxHp, owner.hp + MINIGAME_HEAL);
       owner.stats.healed += owner.hp - b;
-      ev.first = { player: d.player, amount: owner.hp - b, hp: owner.hp, lastLife: b <= 1 };
+      ev.first = { player: d.player, amount: owner.hp - b, hp: owner.hp };
     }
     this.emit(ev);
     this.phase = 'turn';

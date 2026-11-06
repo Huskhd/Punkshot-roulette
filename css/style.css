@@ -185,10 +185,13 @@ body.choosing #caption { bottom: calc(var(--abh, 150px) + 10px); }
 .itembtn.t-rare span { color: #9cc4ff; }
 .itembtn.t-epic span { color: #d6a8ff; }
 .itembtn.t-legendary span { color: #ffd27a; }
+.itembtn.t-mythic { border-color: #b02040; box-shadow: 0 0 10px rgba(255,51,85,0.6), inset 0 0 6px rgba(255,51,85,0.3); }
+.itembtn.t-mythic img { filter: drop-shadow(0 0 3px rgba(255,51,85,0.9)); }
+.itembtn.t-mythic span { color: #ff8aa0; }
 .itembtn.sel { border-color: var(--brass); }
 .tier { font-size: 0.8em; letter-spacing: 1px; text-transform: uppercase; }
-.tier.t-rare { color: #9cc4ff; } .tier.t-epic { color: #d6a8ff; } .tier.t-legendary { color: #ffd27a; }
-.hitem.t-rare { border-color: #2a4a78; } .hitem.t-epic { border-color: #5a2e80; } .hitem.t-legendary { border-color: #7a5a1a; }
+.tier.t-rare { color: #9cc4ff; } .tier.t-epic { color: #d6a8ff; } .tier.t-legendary { color: #ffd27a; } .tier.t-mythic { color: #ff8aa0; }
+.hitem.t-rare { border-color: #2a4a78; } .hitem.t-epic { border-color: #5a2e80; } .hitem.t-legendary { border-color: #7a5a1a; } .hitem.t-mythic { border-color: #8a1a30; }
 .plate .imm { color: #ffd27a; margin-left: 3px; }
 .shootbtn { background: #4a1c12; border-color: var(--rust); font-size: 26px; padding: 8px 26px; letter-spacing: 2px; }
 
@@ -246,6 +249,7 @@ body.lastlife #fx-lastlife { opacity: 1; animation: lastlife 2.4s ease-in-out in
   50% { transform: scale(1); filter: blur(10px) brightness(1.25); }
 }
 .plate .hp .sh { color: #6fa8ff; margin-left: 3px; }
+.plate .hp .tmp { color: #ff8a3a; margin-left: 3px; font-size: 0.85em; }
 
 /* ---------- Pocket Duo handheld ---------- */
 #duo {
@@ -318,6 +322,7 @@ body.duo-open #caption, body.duo-open #tooltip, body.duo-open #tags { display: n
 .tag3d.price.t-rare { border-color: #3d8bff; box-shadow: 0 0 6px rgba(61,139,255,0.6); }
 .tag3d.price.t-epic { border-color: #b455ff; box-shadow: 0 0 6px rgba(180,85,255,0.6); }
 .tag3d.price.t-legendary { border-color: #ffb22e; box-shadow: 0 0 6px rgba(255,178,46,0.65); }
+.tag3d.price.t-mythic { border-color: #ff3355; box-shadow: 0 0 8px rgba(255,51,85,0.75); }
 .tag3d.price .chip { width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle, #7a5a12 40%, #c9a13a 42%); display: inline-block; }
 body.targeting #caption { bottom: auto; top: calc(12% + 40px); }
 @media (max-width: 560px) { .tag3d { font-size: 18px; } .tag3d.price { font-size: 18px; } }

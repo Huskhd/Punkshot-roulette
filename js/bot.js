@@ -15,9 +15,9 @@ import { ITEMS, MAX_SHELLS, MINIGAME_IDS, itemProblem, freeSlots } from './engin
 export const DIFFICULTIES = ['easy', 'hard', 'xhard', 'pro'];
 
 const BASE_VALUE = {
-  stethoscope: 6, saw: 4, cuffs: 5, insurance: 6, goldglove: 5, double: 4, bandage: 4,
+  stethoscope: 6, saw: 4, cuffs: 5, insurance: 8, goldglove: 5, double: 4, bandage: 4,
   doll: 5, mirror: 3, glove: 3, prybar: 4, phone: 4, switch: 4, syringe: 2, dice: 2, fake: 2, rotator: 1,
-  medkit: 6, hack: 4, trash: 4, stinktrash: 2, shield: 5, wings: 7, handheld: 3,
+  medkit: 6, hack: 4, trash: 4, stinktrash: 2, shield: 5, wings: 7, handheld: 4, adrenaline: 5, joker: 4,
 };
 
 export function itemValue(game, p, id) {
@@ -27,6 +27,11 @@ export function itemValue(game, p, id) {
   if (id === 'insurance' && me.hp <= 2) v += 3;
   if (id === 'rotator' && game.alive().length <= 2) v = 0;
   if (id === 'syringe' && me.hp <= 2) v -= 1;
+  if (id === 'adrenaline' && me.hp <= 2) v += 2;
+  if (id === 'joker') {
+    const top = Math.max(...game.alive().map((q) => q.hp));
+    v += Math.max(0, top - me.hp) * 1.5;
+  }
   return v;
 }
 
@@ -150,18 +155,19 @@ function turnAction(game, p, level, rng) {
     if (me.hp <= me.maxHp - 2) { const a = use('medkit'); if (a) return a; }
     if (me.hp < me.maxHp) { const a = use('bandage'); if (a) return a; }
     if (me.hp <= 2) { const a = use('insurance'); if (a) return a; }
+    if (me.hp <= 2) { const a = use('adrenaline'); if (a) return a; }
     if (rng() < 0.5) { const a = use('shield'); if (a) return a; }
     if (me.hp >= 3 && me.hp < me.maxHp && rng() < 0.5) { const a = use('syringe'); if (a) return a; }
     if (rng() < 0.2 && me.hp > minOppHp) { const a = use('handheld', undefined, randomGame()); if (a) return a; }
     if (rng() < 0.25) {
-      const t = pickRandom(opps.filter((q) => !q.hacked && countItems(q) > 0), rng);
+      const t = pickRandom(opps.filter((q) => !q.hacked && !q.jammed && !q.hackSafe && countItems(q) > 0), rng);
       if (t) { const a = use('hack', t.idx); if (a) return a; }
     }
     if (!A.certain && rng() < 0.6) { const a = use('stethoscope'); if (a) return a; }
     if (!A.certain && rng() < 0.3) { const a = use('phone'); if (a) return a; }
     if (rng() < 0.4) { const a = use('doll'); if (a) return a; }
     if (rng() < 0.25) {
-      const t = pickRandom(opps.filter((q) => !q.cuffed), rng);
+      const t = pickRandom(opps.filter((q) => !q.cuffed && !q.cuffSafe), rng);
       if (t) { const a = use('cuffs', t.idx); if (a) return a; }
     }
     if (rng() < 0.35) {
@@ -189,6 +195,14 @@ function turnAction(game, p, level, rng) {
   // ---------- XTRA HARD & PRO (shared core) ----------
   const pro = level === 'pro';
 
+  // Joker: when well behind on HP, or when the others are much better armed.
+  {
+    const topHp = Math.max(...players.filter((q) => q.alive).map((q) => q.hp));
+    const theirs = opps.reduce((s2, q) => s2 + countItems(q), 0);
+    const mine = countItems(me) - 1;
+    if (topHp - me.hp >= (pro ? 2 : 3) || (pro && theirs >= mine + 4 && topHp > me.hp)) { const a = use('joker'); if (a) return a; }
+  }
+
   // Item theft / swaps first: more tools for the rest of the turn.
   {
     const steal = bestSteal(game, p, A);
@@ -205,7 +219,7 @@ function turnAction(game, p, level, rng) {
     if (steal && steal.value >= 5) { const a = use('trash', steal.target, steal.slot); if (a) return a; }
     const oppItems = opps.reduce((s2, q) => s2 + countItems(q), 0);
     if (oppItems >= 3 && oppItems >= 2 * (countItems(me) - 1)) { const a = use('stinktrash'); if (a) return a; }
-    const busy = opps.filter((q) => !q.hacked && countItems(q) >= 2).sort((a, b) => countItems(b) - countItems(a));
+    const busy = opps.filter((q) => !q.hacked && !q.jammed && !q.hackSafe && countItems(q) >= 2).sort((a, b) => countItems(b) - countItems(a));
     const hackT = pro ? (busy.find((q) => q.idx === game.nextAlive(p)) || null) : busy[0];
     if (hackT) { const a = use('hack', hackT.idx); if (a) return a; }
   }
@@ -217,6 +231,7 @@ function turnAction(game, p, level, rng) {
   // The handheld hurts the bottom half: worth it when we're sturdier than the field.
   if (opps.length && ((pro && minOppHp === 1 && me.hp >= 2) || me.hp > maxOppHp)) { const a = use('handheld', undefined, randomGame()); if (a) return a; }
   if (me.hp <= 2) { const a = use('insurance'); if (a) return a; }
+  if (me.hp <= 2 || (pro && A.p >= 0.5 && me.hp <= 3)) { const a = use('adrenaline'); if (a) return a; }
   if ((me.hp >= 3 || (pro && me.insured)) && me.maxHp - me.hp >= (pro ? 3 : 2)) { const a = use('syringe'); if (a) return a; }
 
   // Pro: wipe out what opponents know before they can use it.

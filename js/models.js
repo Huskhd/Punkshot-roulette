@@ -489,6 +489,64 @@ export function makeShieldToken() {
   );
 }
 
+// Orange pill shown next to the candles for each point of temporary HP (Adrenaline).
+export function makeTempToken() {
+  return group(
+    put(cyl(0.016, 0.016, 0.03, 6, lam(0xff7a1a, { emissive: 0x8a3000 })), 0, 0.015, 0),
+    put(cyl(0.017, 0.017, 0.006, 6, lam(0xffd060, { emissive: 0x806010 })), 0, 0.03, 0),
+  );
+}
+
+// Adrenaline auto-injector, needle end along +y (same hooks as makeSyringe, so it injects the same way).
+export function makeInjector() {
+  const s = new THREE.Group();
+  s.add(put(cyl(0.017, 0.017, 0.13, 8, lam(0xf2c21a, { emissive: 0x3a2a00 })), 0, 0, 0)); // body
+  s.add(put(cyl(0.0175, 0.0175, 0.025, 8, lam(0xf06a10)), 0, 0.075, 0)); // orange needle end
+  const win = cyl(0.0172, 0.0172, 0.04, 8, basic(0xffa040));
+  win.geometry.translate(0, -0.02, 0);
+  win.position.y = 0.035;
+  s.add(win); // the window with the dose behind it
+  for (const y of [-0.02, 0.0]) s.add(put(box(0.036, 0.004, 0.004, lam(0x222222)), 0, y, 0.016));
+  const cap = new THREE.Group(); // blue safety release, pressed in on the jab
+  cap.add(put(cyl(0.014, 0.017, 0.022, 8, lam(0x2a6ad0)), 0, -0.076, 0));
+  s.add(cap);
+  s.userData = { plunger: cap, liquid: win, tip: V(0, 0.088, 0), grip: V(0, -0.03, 0) };
+  return s;
+}
+
+// A playing card: the Joker. userData.card is the card itself (for flips).
+let JOKER_TEX = null;
+export function makeJokerCard() {
+  if (!JOKER_TEX) {
+    JOKER_TEX = [
+      canvasTex(20, 28, (g) => { // face
+        g.fillStyle = '#f4ecd8'; g.fillRect(0, 0, 20, 28);
+        g.fillStyle = '#b01828'; g.fillRect(1, 1, 3, 1); g.fillRect(2, 1, 1, 4); g.fillRect(1, 4, 2, 1); // "J" top-left
+        g.fillRect(16, 23, 3, 1); g.fillRect(17, 23, 1, 4); g.fillRect(16, 26, 2, 1);
+        // jester: three-point hat with bells, a grin
+        g.fillStyle = '#6a1a9a'; g.fillRect(6, 9, 3, 3); g.fillRect(11, 9, 3, 3);
+        g.fillStyle = '#c81e28'; g.fillRect(9, 8, 2, 4); g.fillRect(5, 7, 2, 2); g.fillRect(13, 7, 2, 2);
+        g.fillStyle = '#ffd040'; g.fillRect(4, 6, 2, 2); g.fillRect(14, 6, 2, 2); g.fillRect(9, 6, 2, 2);
+        g.fillStyle = '#e8d0b0'; g.fillRect(7, 12, 6, 6);
+        g.fillStyle = '#111'; g.fillRect(8, 14, 1, 1); g.fillRect(11, 14, 1, 1); g.fillRect(8, 16, 4, 1);
+        g.fillStyle = '#c81e28'; g.fillRect(6, 18, 8, 4);
+        g.fillStyle = '#6a1a9a'; g.fillRect(9, 18, 2, 4);
+      }),
+      canvasTex(20, 28, (g) => { // back
+        g.fillStyle = '#7a1020'; g.fillRect(0, 0, 20, 28);
+        g.fillStyle = '#c03040';
+        for (let y = 2; y < 26; y += 3) for (let x = 2 + (y % 2); x < 18; x += 3) g.fillRect(x, y, 1, 1);
+        g.strokeStyle = '#f0d8a0'; g.strokeRect(1.5, 1.5, 17, 25);
+      }),
+    ];
+  }
+  const edge = lam(0xe8e0cc);
+  const face = lam(0xffffff, { map: JOKER_TEX[0], emissive: 0x403830 });
+  const back = lam(0xffffff, { map: JOKER_TEX[1] });
+  const card = mesh(new THREE.BoxGeometry(0.07, 0.002, 0.1), [edge, edge, face, back, edge, edge]);
+  return card;
+}
+
 // One handcuff ring; table.js snaps these around a player's wrists.
 export function makeCuffRing() {
   const m = new THREE.Mesh(new THREE.TorusGeometry(0.068, 0.017, 5, 12), lam(0xd0d6dc, { emissive: 0x3a3e44 }));
@@ -606,7 +664,7 @@ function gloveModel(color, emissive) {
 
 // Rare / epic / legendary items get a faint colored halo (see glowMat).
 export const itemTier = (id) => (ITEMS[id] && ITEMS[id].tier) || 'common';
-const TIER_GLOW = { rare: 0x3d8bff, epic: 0xb455ff, legendary: 0xffb22e };
+const TIER_GLOW = { rare: 0x3d8bff, epic: 0xb455ff, legendary: 0xffb22e, mythic: 0xff3355 };
 
 export function makeItem(id, { glow = true } = {}) {
   const g = new THREE.Group();
@@ -931,6 +989,28 @@ export function makeItem(id, { glow = true } = {}) {
         g.add(w);
       }
       g.add(put(torus(0.028, 0.004, 4, 14, Math.PI * 2, lam(0xe8c040, { emissive: 0x806010 })), 0, 0.1, 0, Math.PI / 2, 0, 0));
+      break;
+    }
+    case 'adrenaline': {
+      const pen = makeInjector();
+      pen.rotation.z = Math.PI / 2;
+      pen.position.y = 0.018;
+      g.add(pen);
+      g.userData.syr = pen;
+      g.userData.grip = V(0.05, 0.03, 0);
+      break;
+    }
+    case 'joker': {
+      // a little fan: the Joker on top of two face-down cards
+      for (const [x, ry, y] of [[-0.012, 0.35, 0.001], [0.01, -0.25, 0.003]]) {
+        const c = makeJokerCard();
+        c.material = c.material.map((m, i) => (i === 2 ? c.material[3] : m)); // both face down
+        g.add(put(c, x, y, 0, 0, ry, 0));
+      }
+      const card = makeJokerCard();
+      g.add(put(card, 0, 0.006, 0.004, 0, 0.05, 0));
+      g.userData.card = card;
+      g.userData.grip = V(0, 0.01, -0.03);
       break;
     }
     case 'handheld': {

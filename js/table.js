@@ -322,6 +322,7 @@ export class TableView {
       p.hands.forEach((h) => { h.parent && h.parent.remove(h); });
       p.candles.forEach((c) => this.scene.remove(c));
       p.shields.forEach((c) => this.scene.remove(c));
+      p.temps.forEach((c) => this.scene.remove(c));
       Object.values(p.status).forEach((s) => s && this.scene.remove(s));
       if (p.cuffs) this.scene.remove(p.cuffs.chain);
     }
@@ -358,7 +359,7 @@ export class TableView {
       const rest = [s.at(1.58, -0.36, TY + 0.005), s.at(1.58, 0.36, TY + 0.005)];
       const restQ = quatFromEuler(0, s.faceIn, 0);
       hands.forEach((h, k) => { h.position.copy(rest[k]); h.quaternion.copy(restQ); this.scene.add(h); });
-      this.P.push({ idx: i, seat: s, char: ch, hands, rest, restQ, candles: [], shields: [], status: {}, cuffs: null, alive: true, phase: Math.random() * 6, lookY: 0 });
+      this.P.push({ idx: i, seat: s, char: ch, hands, rest, restQ, candles: [], shields: [], temps: [], status: {}, cuffs: null, alive: true, phase: Math.random() * 6, lookY: 0 });
     });
     this.camMode = 'seat';
     this.P.forEach((p, i) => { p.char.visible = i !== viewer; });
@@ -396,6 +397,21 @@ export class TableView {
     while (P.shields.length > n) {
       const s = P.shields.pop();
       if (animated) { this.puff(s.position.clone().add(V3(0, 0.05, 0)), 0x5a8ad0); scaleTo(s, 0.01, 0.25).then(() => this.scene.remove(s)); } else this.scene.remove(s);
+    }
+  }
+  // Adrenaline: one orange pill per point of temporary HP, in a row in front of the candles.
+  setTemp(P, n, animated) {
+    while (P.temps.length < n) {
+      const s = M.makeTempToken();
+      const k = P.temps.length;
+      s.position.copy(P.seat.at(0.56, -0.14 - k * 0.055, TY));
+      this.scene.add(s);
+      P.temps.push(s);
+      if (animated) { s.scale.setScalar(0.01); wait(k * 0.05).then(() => scaleTo(s, 1.3, 0.25, ease.back)); } else s.scale.setScalar(1.3);
+    }
+    while (P.temps.length > n) {
+      const s = P.temps.pop();
+      if (animated) { this.puff(s.position.clone().add(V3(0, 0.04, 0)), 0xff8a3a, 0.7); scaleTo(s, 0.01, 0.25).then(() => this.scene.remove(s)); } else this.scene.remove(s);
     }
   }
   lightCandle(c, on, instant) {
@@ -466,6 +482,7 @@ export class TableView {
       if (!P) return;
       this.setCandles(P, pl.hp, pl.maxHp);
       this.setShields(P, pl.alive ? pl.shield || 0 : 0, false);
+      this.setTemp(P, pl.alive ? pl.temp || 0 : 0, false);
       if (pl.alive !== P.alive) this.setAlivePose(P, pl.alive);
       for (const key of STATUS_ORDER) this.setStatus(i, key, key === 'hacked' ? !!(pl.hacked || pl.jammed) : !!pl[key], true);
       this.setCuffs(i, pl.cuffed, true);
@@ -760,7 +777,7 @@ export class TableView {
       if (self) ring.scale.setScalar(1.4);
       ring.userData.pick = { kind: 'target', idx: i };
       const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-      const hp = p.alive ? `<em>${'▲'.repeat(Math.max(0, p.hp))}${p.shield ? `<b>${'◆'.repeat(p.shield)}</b>` : ''}</em>` : '';
+      const hp = p.alive ? `<em>${'▲'.repeat(Math.max(0, p.hp))}${p.shield ? `<b>${'◆'.repeat(p.shield)}</b>` : ''}${p.temp ? `<i>+${p.temp}</i>` : ''}</em>` : '';
       const label = self ? esc(t('yourself')) : `${esc(p.name)} ${hp}`;
       const tag = this.addTag(label, self ? P.seat.at(1.35, 0, TY + 0.3) : P.seat.at(M.SEAT_R - 0.15, 0, kind === 'dead' ? 1.0 : 1.3), {
         cls: `${reason ? 'bad' : ''} ${self ? 'self' : ''}`, group: 'target',
@@ -1054,7 +1071,12 @@ export class TableView {
         break;
       }
       case 'take': case 'buy': {
-        const m = this.trayItems.get(e.uid) || (() => { const x = this.makeItemMesh(e.id, e.uid); x.position.copy(this.tray.position); this.scene.add(x); return x; })();
+        const m = this.trayItems.get(e.uid) || (() => {
+          const x = this.makeItemMesh(e.id, e.uid);
+          if (e.gift) { x.position.set(0, TY, 0.35); x.scale.setScalar(0.01); scaleTo(x, ITEM_SCALE, 0.3, ease.back); sfx('boot'); } else x.position.copy(this.tray.position);
+          this.scene.add(x);
+          return x;
+        })();
         this.trayItems.delete(e.uid);
         if (m.userData.label) { this.domTags = this.domTags.filter((tg) => tg !== m.userData.label); m.userData.label.el.remove(); m.userData.label = null; }
         m.userData.pick = { kind: 'item', uid: e.uid };
@@ -1064,7 +1086,7 @@ export class TableView {
         pl(e.player).slots[e.slot] = { uid: e.uid, id: e.id };
         if (e.t === 'buy') { pl(e.player).chips = e.chips; sfx('coin'); }
         const item = itemName(e.id);
-        this.say(e.t === 'buy' ? t('c_bought', { a: this.A(e.player), item, chips: e.chips }) : t('c_took', { a: this.A(e.player), item }), 2);
+        this.say(e.t === 'buy' ? t('c_bought', { a: this.A(e.player), item, chips: e.chips }) : t(e.gift ? 'c_gift' : 'c_took', { a: this.A(e.player), item }), 2);
         await this.carryToSlot(this.P[e.player], m, e.player, e.slot);
         this.hud();
         break;
@@ -1077,7 +1099,18 @@ export class TableView {
         await this.hideTray(false);
         break;
       }
+      case 'stocked':
+        this.say(t('c_stocked', { a: this.A(e.player) }), 2);
+        await wait(1.0);
+        break;
+      case 'itemBan':
+        vs.itemBan = e.left;
+        sfx('sting');
+        this.say(t('c_itemBan', { k: e.left }), 2.4);
+        await wait(1.4);
+        break;
       case 'turn': {
+        if (e.decay) e.decay.forEach((d) => { pl(d.player).temp = d.temp; this.setTemp(this.P[d.player], d.temp, true); });
         this.say(t('c_turn', { a: this.A(e.player) }), 2);
         vs.turn = e.player;
         vs.decision = { kind: 'turn', player: e.player };
@@ -1407,6 +1440,13 @@ export class TableView {
       this.say(t('c_blocked', { a: this.A(e.player), k: e.blocked }), 2);
       await wait(0.8);
     }
+    if (e.absorbed) {
+      vs.players[e.player].temp = e.temp;
+      sfx('heartbeat');
+      this.setTemp(P, e.temp, true);
+      this.say(t('c_absorbed', { a: this.A(e.player), k: e.absorbed }), 2);
+      await wait(0.8);
+    }
     if (e.amount > 0) {
       sfx('hurt');
       const mats = P.char.userData.mats;
@@ -1436,6 +1476,8 @@ export class TableView {
     P.char.userData.eyes.forEach((x) => { x.visible = false; });
     P.candles.forEach((c) => this.lightCandle(c, false, false));
     this.setShields(P, 0, true);
+    this.setTemp(P, 0, true);
+    vs.players[e.player].temp = 0;
     for (const m of this.itemMeshes.values()) if (m.userData.owner === e.player) scaleTo(m, 0.01, 0.5);
     STATUS_ORDER.forEach((k) => this.setStatus(e.player, k, false));
     this.setCuffs(e.player, false);
@@ -1453,7 +1495,7 @@ export class TableView {
     if (e.via === 'insurance') {
       vs.players[e.player].insured = 0;
       this.setStatus(e.player, 'insured', false);
-      this.say(t('c_reviveIns', { a: this.A(e.player) }), 2.6);
+      this.say(t('c_reviveIns', { a: this.A(e.player), k: e.hp }), 2.6);
     } else {
       vs.players[e.player].slots[e.slot] = null;
       const m = this.itemMeshes.get(e.uid);
@@ -2191,6 +2233,79 @@ export class TableView {
         if (e.good) this.say(t('c_syrGood', { a, k: e.amount }), 2.6);
         else this.say(t('c_syrBad'), 1.6);
         await wait(0.9);
+        break;
+      }
+      case 'adrenaline': {
+        // a jab into the chest: the heart kicks in and orange pills of extra HP pop up
+        const chest = this.chestPos(e.player);
+        if (me) this.camTo(this.camPos.clone(), this.camLook.clone().lerp(chest, 0.55), 0.4);
+        else this.camFocus(chest, 0.2);
+        await this.inject(hand, u.syr, chest, me ? P.seat.at(1.8, 0.4, TY + 0.6) : P.seat.at(2.0, 0.35, 1.34));
+        for (let i = 0; i < 3; i++) { sfx('heartbeat'); this.shake(0.03); await wait(0.22); }
+        if (me) this.ui.contrast && this.ui.contrast(0.8);
+        else {
+          const b = P.char.userData.body;
+          animate(0.5, (k) => { b.position.y = Math.abs(Math.sin(k * Math.PI * 3)) * 0.04; });
+        }
+        vs.players[e.player].temp = e.temp;
+        this.setTemp(P, e.temp, true);
+        sfx('powerup');
+        this.say(t('c_adrenaline', { a, k: e.temp }), 2.6);
+        await wait(0.6);
+        break;
+      }
+      case 'joker': {
+        // show the card to the table, then everything on it burns away
+        const pos = me ? this.inspectPos(P, 0.04, 0.35, 1.0) : this.front(P, 0.05, 0.42, 1.28);
+        const front = me ? this.camHome().pos.clone().sub(pos).normalize() : P.seat.d.clone().negate();
+        const up = UP.clone().addScaledVector(front, -front.y).normalize();
+        if (!me) this.camFocus(pos, 0.25);
+        await this.holdFromBack(hand, m, pos, alignQuat(V3(0, 1, 0), V3(0, 0, 1), front, up), front, up, 0.45);
+        const card = u.card;
+        const c0 = card.position.clone();
+        sfx('sting');
+        const fl = new THREE.PointLight(0xff3355, 0, 4, 1.5);
+        fl.position.copy(m.getWorldPosition(V3()).addScaledVector(front, 0.1));
+        this.scene.add(fl);
+        await animate(0.6, (k) => {
+          card.position.set(c0.x, c0.y + Math.sin(k * Math.PI) * 0.02 + k * 0.01, c0.z);
+          card.scale.setScalar(1 + k * 0.5);
+          card.rotation.y = 0.05 + Math.sin(k * Math.PI * 4) * 0.08 * (1 - k);
+          fl.intensity = k * 14;
+        }, ease.out);
+        this.shake(0.05);
+        sfx('zap');
+        // every item on the table goes up in smoke
+        const burns = [];
+        e.removed.forEach((r, k) => {
+          vs.players[r.player].slots[r.slot] = null;
+          const im = this.itemMeshes.get(r.uid);
+          this.itemMeshes.delete(r.uid);
+          if (!im) return;
+          this.unglitch(im);
+          burns.push(wait(k * 0.06).then(() => {
+            const p0 = im.getWorldPosition(V3());
+            this.puff(p0.clone().add(V3(0, 0.05, 0)), 0x5a1a6a, 1.5);
+            this.sparks(p0.clone().add(V3(0, 0.03, 0)), 4, 0xff3355);
+            const s0 = im.scale.x;
+            return animate(0.35, (k2) => { im.scale.set(s0 * (1 + k2 * 0.3), s0 * (1 - k2), s0 * (1 + k2 * 0.3)); im.rotation.y += 0.2; }, ease.in)
+              .then(() => im.parent && im.parent.remove(im));
+          }));
+        });
+        await Promise.all(burns);
+        await animate(0.4, (k) => { fl.intensity = 14 * (1 - k); });
+        this.scene.remove(fl);
+        vs.itemBan = e.ban;
+        if (e.amount > 0) {
+          vs.players[e.player].hp = e.hp;
+          sfx('heal');
+          P.candles.forEach((c, k) => this.lightCandle(c, k < e.hp));
+          this.hearts(this.aboveHead(e.player), false, 3);
+        }
+        this.say(t('c_joker', { a, k: e.amount, n: e.removed.length }), 3.4);
+        this.hud();
+        this.puff(m.getWorldPosition(V3()), 0xff3355, 1.6);
+        await wait(0.8);
         break;
       }
       case 'cuffs': {

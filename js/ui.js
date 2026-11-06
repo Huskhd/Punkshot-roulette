@@ -92,7 +92,7 @@ export class UI {
     const turn = s.decision ? s.decision.player : s.turn;
     $('plates').innerHTML = s.players.map((p, i) => {
       const hp = Array.from({ length: p.maxHp }, (_, k) => (k < p.hp ? '▲' : '<span class="off">▲</span>')).join('');
-      const shield = (p.shield ? `<span class="sh">${'◆'.repeat(Math.min(p.shield, 6))}</span>` : '') + (p.immune ? '<span class="imm">∞</span>' : '');
+      const shield = (p.shield ? `<span class="sh">${'◆'.repeat(Math.min(p.shield, 6))}</span>` : '') + (p.temp ? `<span class="tmp">+${p.temp}</span>` : '') + (p.immune ? '<span class="imm">∞</span>' : '');
       const st = [];
       if (p.doll) st.push(this.img('doll', itemName('doll')));
       if (p.saw) st.push(this.img('saw', itemName('saw')));

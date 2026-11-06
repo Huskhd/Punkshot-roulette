@@ -22,54 +22,61 @@ order nobody knows. On your turn use any items you like, then point the gun at y
 - Blank at yourself → you go again. Blank at someone else → your turn ends.
 - Gun empty → new round. Last player standing wins. Then: scoreboard and rematch.
 - **Last life:** at 1 HP, healing items (Bandages, Medkit, Drug Syringe) stop working on you. Revives (Life Insurance,
-  Angel Wings) and shields still work.
+  Angel Wings), shields, Adrenaline, the Joker and a Pocket Duo win still work.
+- **No lock-downs:** a player who just sat out a turn in Handcuffs can't be cuffed again until they've played a turn,
+  and a hacked player can't be hacked again until they've had a turn with their items back.
 
 ### Item modes
 
 | Mode | How it works |
 | --- | --- |
-| Progressive | Round 1 has no items, round 2 gives 2 each, round 3 gives 3 each… (max 5 per round). |
+| Progressive | Round 1 has no items, then 1, 2, 2, 3, 3, 3… each (max 3 per round). |
 | Draft | Same amounts, but everyone takes turns picking from one shared tray. |
 | Shop | Surviving a round earns chips (3 + damage you dealt). Spend them in the shop each round. |
-| No items | Pure nerve. |
+| Pocket Duo only | Everyone gets one Pocket Duo every round (from round 1), and nothing else. |
+| Classic | No items: only the gun and the shells. Pure nerve. |
 
-Everyone holds at most **6 items**. Anything that doesn't fit is lost. In Draft, the pool has one spare item per player so the last picker still gets a choice.
+Everyone holds at most **6 items**. Handouts stop topping you up at **4 items**: hold 3 and you get at most 1, hold 4 or
+more and you get nothing that round (stealing can still take you higher). In Draft, the pool has one spare item per
+player so the last picker still gets a choice.
 
 ### Items
 
-Items come in four rarities: common, **rare** (blue glow), **epic** (purple glow) and **legendary** (gold glow).
-Rarer items show up less often and cost more in the shop (rare 4, epic 5, legendary 6 chips). The longer the game
-goes, the more often the rare ones turn up: by round 8 each tier shows up about as often as the tier below it used to
-(legendary like epic, epic like rare, rare nearly like common, but still a bit rarer than the average common item).
+Items come in five rarities: common, **rare** (blue glow), **epic** (purple glow), **legendary** (gold glow) and
+**mythic** (crimson glow). Each draw is roughly 80% common, 11% rare, 4.6% epic, 3.2% legendary and 0.7% mythic. Later
+in the game the higher tiers turn up a little more often (by round 10: about 74 / 15 / 6 / 4.6 / 1.1% in the same order). Shop prices:
+rare 4, epic 5, legendary 6, mythic 8 chips.
 
 **The game speeds up every round** (+0.15x per round, on top of the speed setting, never past x3 in total).
 
 | Item | Effect |
 | --- | --- |
-| Stethoscope | Learn if the current shell is live or blank (only you hear it: a heartbeat means live, silence means blank). |
+| Stethoscope *(rare)* | Learn if the current shell is live or blank (only you hear it: a heartbeat means live, silence means blank). |
 | Pry Bar | Pop the current shell out without firing. Everyone sees what it was. |
 | Saw | Cut the barrel short: your next shot deals double damage. One shot only, live or blank. |
 | Bandages | Heal 1 HP. |
-| Medkit *(epic)* | Heal to full HP. |
+| Medkit *(legendary)* | Heal to full HP. |
 | Shield | Adds 1 shield to your health bar; it blocks 1 damage. Stacks. |
-| Boodoo Doll *(epic)* | The next shot another player aims at you bounces back at them. If the shooter has a doll up too, theirs parries yours. |
+| Boodoo Doll *(legendary)* | The next shot another player aims at you bounces back at them. If the shooter has a doll up too, theirs parries yours. |
 | Mirror *(rare)* | Swap your whole stash of items with another player. |
 | Rigged Dice | Reshuffle every shell left in the gun. |
 | Pickpocket Glove | Steal a random item from another player. |
-| Golden Glove | Steal the item of your choice from another player. |
+| Golden Glove *(epic)* | Steal the item of your choice from another player. |
 | Trash Can | Throw away one item of your choice from another player. |
 | Smelly Trash Can *(rare)* | 25% of all items on the table rot away — yours too, but yours are 25% less likely to. |
 | Fake Shell | Slip an extra blank into the gun at a random spot. |
-| Life Insurance *(legendary)* | Sign it, and the next time you die you come back with 1 HP. Covers 3 rounds (one round = one magazine, the current one included), or until it pays out. |
+| Life Insurance *(mythic)* | Sign it, and the next time you die you come back with full HP. Covers 3 rounds (one round = one magazine, the current one included), or until it pays out. |
 | Angel Wings *(legendary)* | Bring a dead player back with half their HP — or keep them: if you die holding them, you come back. |
 | Double Barrel | Upgrades the gun with a second barrel: your next shot fires the next two shells at once. |
 | Switch | Every live shell left becomes blank and every blank becomes live. |
 | Drug Syringe | 50/50: heal 3 HP, or lose 1 HP. |
-| Handcuffs | Pick a player — they skip their next turn. |
-| Hacking Device *(rare)* | Pick a player — they can't use items on their next turn. |
+| Handcuffs | Pick a player — they skip their next turn. Can't be used on them again until they've played. |
+| Hacking Device *(rare)* | Pick a player — they can't use items on their next turn. Can't be used on them again until they've had a free turn. |
 | Rotator | Reverse the turn order. |
 | Phone | A voice tells you one random shell left in the gun and its position (only you hear it). |
-| Pocket Duo *(epic)* | Everyone plays a minigame you choose. The bottom half of the scores loses 2 HP. If you come first, you heal 2 HP (not on your last life). |
+| Pocket Duo *(legendary)* | Everyone plays a minigame you choose. The bottom half of the scores loses 2 HP. If you come first, you heal 2 HP — even on your last life. |
+| Adrenaline *(epic)* | 8 temporary HP. Damage eats them first (after shields); they drop by 1 at the start of every player's turn. |
+| Joker Card *(mythic)* | Destroys every item on the table, stops item handouts for the next 2 rounds, and raises your HP to match the healthiest player. |
 
 Whoever is due to shoot next picks items first (Draft and Shop), so a blank on the last shell, aimed at yourself, buys
 you first pick.
