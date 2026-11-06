@@ -1,6 +1,6 @@
 // Plays thousands of bot-vs-bot games through the real rules engine and checks
 // invariants. Run: npm test
-import { Game, MAX_SLOTS, MINIGAME_IDS, MINIGAME_DMG, MINIGAME_HEAL, INSURANCE_ROUNDS, MAX_PER_ROUND, HANDOUT_CAP, TEMP_HP, JOKER_ROUNDS, ITEMS, itemProblem, itemsForRound, handoutFor, itemWeight, roundSpeed, MAX_SPEED, redactEvents, mulberry32 } from '../js/engine.js';
+import { Game, MAX_SLOTS, MINIGAME_IDS, MINIGAME_DMG, MINIGAME_HEAL, INSURANCE_ROUNDS, MAX_PER_ROUND, TEMP_HP, JOKER_ROUNDS, ITEMS, itemProblem, itemsForRound, itemWeight, roundSpeed, MAX_SPEED, redactEvents, mulberry32 } from '../js/engine.js';
 import { botAction } from '../js/bot.js';
 
 let failures = 0;
@@ -263,8 +263,14 @@ for (const mode of ['progressive', 'shop']) {
   assert(dev.filter((e) => e.t === 'take' && e.id === 'handheld').length === 2 && dm.decision.kind === 'turn', 'Pocket Duo mode hands out Duos from round 1');
   // items per round cap at 5; rarer items get more common later on
   assert(MAX_PER_ROUND === 3 && [1, 2, 3, 4, 5, 9].map(itemsForRound).join() === '0,1,2,2,3,3', 'items per round: 0,1,2,2,3...');
-  const stocked = { slots: [{}, {}, {}, null, null, null] };
-  assert(handoutFor(stocked, 9) === HANDOUT_CAP - 3 && handoutFor({ slots: [{}, {}, {}, {}, null, null] }, 9) === 0, 'handouts stop at the cap');
+  // everyone gets the same handout, however many items they're already holding
+  const eq = new Game({ players: [{ name: 'a' }, { name: 'b' }], hp: 4, itemMode: 'progressive', seed: 81 });
+  eq.start();
+  eq.players[0].slots = [{ uid: 1, id: 'saw' }, { uid: 2, id: 'saw' }, { uid: 3, id: 'saw' }, { uid: 4, id: 'saw' }, null, null];
+  eq.round = 4;
+  eq.decision = { kind: 'turn', player: eq.turn };
+  const trays = eq.adminReload().filter((e) => e.t === 'tray');
+  assert(trays.length >= 1 && trays.every((e) => e.items.length === itemsForRound(5)), 'same handout for everyone');
   for (const id of ['hack', 'medkit', 'wings', 'joker']) assert(itemWeight(id, 20) > itemWeight(id, 2), `${id} gets a bit more common`);
   const tierW = (tier) => ITEMS[Object.keys(ITEMS).find((id) => ITEMS[id].tier === tier)].weight;
   assert(tierW('rare') > tierW('epic') && tierW('epic') > tierW('legendary') && tierW('legendary') > tierW('mythic'), 'tiers get rarer');

@@ -1099,10 +1099,6 @@ export class TableView {
         await this.hideTray(false);
         break;
       }
-      case 'stocked':
-        this.say(t('c_stocked', { a: this.A(e.player) }), 2);
-        await wait(1.0);
-        break;
       case 'itemBan':
         vs.itemBan = e.left;
         sfx('sting');

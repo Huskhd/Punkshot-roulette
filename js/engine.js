@@ -66,7 +66,6 @@ export const MINIGAME_DMG = 2; // what the bottom half loses to the Pocket Duo
 export const MINIGAME_HEAL = 2; // what the Pocket Duo's owner heals if they come first (even on the last life)
 export const INSURANCE_ROUNDS = 3; // Life Insurance covers this many rounds (magazines), the current one included
 export const MAX_PER_ROUND = 3; // most items handed out per round
-export const HANDOUT_CAP = 4; // handouts stop topping you up once you hold this many
 export const TEMP_HP = 8; // Adrenaline's temporary HP (loses 1 at the start of every turn)
 export const JOKER_ROUNDS = 2; // rounds without item handouts after a Joker
 
@@ -165,8 +164,6 @@ export function itemProblem(players, shellsLeft, p, id, target, pick) {
 // Items handed out per round: none in round 1, then 1, 2, 2, 3, 3, 3...
 const PER_ROUND = [0, 0, 1, 2, 2];
 export function itemsForRound(round) { return round < PER_ROUND.length ? PER_ROUND[Math.max(0, round)] : MAX_PER_ROUND; }
-// ...and fewer for whoever is already well stocked (nothing at HANDOUT_CAP items or more).
-export function handoutFor(pl, round) { return Math.max(0, Math.min(itemsForRound(round), HANDOUT_CAP - pl.slots.filter(Boolean).length)); }
 
 export class Game {
   // opts: { players: [{name, char}], hp, itemMode, seed }
@@ -324,12 +321,10 @@ export class Game {
       this.nextProgressive();
     } else if (mode === 'draft') {
       // shared pool with a few spare items, so even the last picker has a choice
-      const picks = {};
-      order.forEach((p) => { picks[p] = handoutFor(this.players[p], this.round); });
-      const total = order.reduce((sum, p) => sum + picks[p], 0);
-      if (total === 0) { this.beginTurns(); return; }
       this.tray = [];
-      for (let k = 0; k < total + order.length; k++) this.tray.push(this.newItem(this.rollItem()));
+      for (let k = 0; k < n * order.length + order.length; k++) this.tray.push(this.newItem(this.rollItem()));
+      const picks = {};
+      order.forEach((p) => { picks[p] = n; });
       this.ip = { mode, order, cursor: 0, picks, n };
       this.emit({ t: 'tray', mode, player: -1, items: this.tray.map((x) => ({ ...x })), picks: n, order });
       this.nextDraft();
@@ -350,17 +345,10 @@ export class Game {
     while (ip.i < ip.order.length) {
       const p = ip.order[ip.i];
       const pl = this.players[p];
-      const give = handoutFor(pl, this.round);
-      if (!pl.alive || give === 0) { // well stocked: nothing this round
-        if (pl.alive) this.emit({ t: 'stocked', player: p });
-        ip.i++;
-        continue;
-      }
       this.tray = [];
-      for (let k = 0; k < give; k++) this.tray.push(this.newItem(this.rollItem()));
-      const order = ip.shown ? undefined : ip.order;
-      ip.shown = true;
-      this.emit({ t: 'tray', mode: 'progressive', player: p, items: this.tray.map((x) => ({ ...x })), order });
+      for (let k = 0; k < ip.n; k++) this.tray.push(this.newItem(this.rollItem()));
+      this.emit({ t: 'tray', mode: 'progressive', player: p, items: this.tray.map((x) => ({ ...x })), order: ip.i === 0 ? ip.order : undefined });
+      if (!pl.alive || freeSlots(pl) === 0) { this.endTray('full'); ip.i++; continue; }
       this.decision = { kind: 'take', player: p };
       return;
     }

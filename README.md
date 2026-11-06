@@ -37,8 +37,8 @@ order nobody knows. On your turn use any items you like, then point the gun at y
 | Pocket Duo only | Everyone gets one Pocket Duo every round (from round 1), and nothing else. |
 | Classic | No items: only the gun and the shells. Pure nerve. |
 
-Everyone holds at most **6 items**. Handouts stop topping you up at **4 items**: hold 3 and you get at most 1, hold 4 or
-more and you get nothing that round (stealing can still take you higher). In Draft, the pool has one spare item per
+Everyone holds at most **6 items**, and everyone is offered the same number each round, however many they've saved
+up. Anything that doesn't fit is lost. In Draft, the pool has one spare item per
 player so the last picker still gets a choice.
 
 ### Items
