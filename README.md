@@ -25,6 +25,7 @@ order nobody knows. On your turn use any items you like, then point the gun at y
   Angel Wings), shields, Adrenaline, the Joker and a Pocket Duo win still work.
 - **No lock-downs:** a player who just sat out a turn in Handcuffs can't be cuffed again until they've played a turn,
   and a hacked player can't be hacked again until they've had a turn with their items back.
+- **Fresh magazine, fresh start:** Handcuffs and hacks wear off when the round ends (along with those cooldowns).
 
 ### Item modes
 

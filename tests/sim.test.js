@@ -212,6 +212,18 @@ for (const mode of ['progressive', 'shop']) {
   cg.act(cb, { type: 'shoot', target: ca }); // live at a, turn passes back
   assert(cg.decision.player === ca && itemProblem(cg.players, cg.shells.length, ca, 'hack', cb) === 'hackCooldown', 'no hacking again before a free turn');
   assert(itemProblem(cg.players, cg.shells.length, ca, 'cuffs', cb) === null, 'cuffs fine again after b played');
+  // Cuffs and hacks don't carry over into the next round
+  const cr = new Game({ players: [{ name: 'a' }, { name: 'b' }, { name: 'c' }], hp: 4, itemMode: 'none', seed: 45 });
+  cr.start();
+  const cx = cr.decision.player, cy = (cx + 1) % 3, cz = (cx + 2) % 3;
+  cr.players[cy].cuffed = true;
+  cr.players[cz].hacked = true;
+  cr.players[cz].hackSafe = true;
+  const crEv = cr.adminReload();
+  const fr = crEv.find((e) => e.t === 'statusClear');
+  assert(fr && fr.freed.length === 2, 'statusClear lists both');
+  assert(cr.players.every((q) => !q.cuffed && !q.hacked && !q.jammed && !q.cuffSafe && !q.hackSafe), 'cuffs and hacks end with the round');
+  assert(!crEv.some((e) => e.t === 'cuffSkip'), 'no cuff skip in the new round');
   // Adrenaline: 8 temporary HP, soaks damage after shields, wears off 1 per turn
   const ad = new Game({ players: [{ name: 'a' }, { name: 'b' }, { name: 'c' }], hp: 4, itemMode: 'none', seed: 51 });
   ad.start();

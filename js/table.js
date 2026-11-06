@@ -1148,6 +1148,21 @@ export class TableView {
         if (e.first) await this.duoFirst(e.first);
         break;
       }
+      case 'statusClear': {
+        // a new magazine: cuffs come off, hacked gear comes back to life
+        let cuffs = false;
+        for (const f of e.freed) {
+          Object.assign(pl(f.player), { cuffed: false, hacked: false, jammed: false, cuffSafe: false, hackSafe: false });
+          if (f.cuffed) { this.setCuffs(f.player, false); cuffs = true; }
+          if (f.hacked) this.setStatus(f.player, 'hacked', false);
+        }
+        sfx(cuffs ? 'chain' : 'blip');
+        const names = e.freed.map((f) => (f.player === this.viewer ? t('you') : this.names[f.player])).join(', ');
+        this.say(t('c_freed', { names }), 2.2);
+        this.hud();
+        await wait(1.0);
+        break;
+      }
       case 'insuranceEnd': {
         pl(e.player).insured = 0;
         this.setStatus(e.player, 'insured', false);

@@ -510,6 +510,13 @@ export class Game {
     });
     this.emit({ t: 'roundEnd', round: this.round, gains });
     expired.forEach((i) => this.emit({ t: 'insuranceEnd', player: i }));
+    // Handcuffs and hacks don't carry over into the next round (nor do their cooldowns).
+    const freed = [];
+    this.players.forEach((p) => {
+      if (p.cuffed || p.hacked || p.jammed) freed.push({ player: p.idx, cuffed: p.cuffed, hacked: p.hacked || p.jammed });
+      p.cuffed = p.hacked = p.jammed = p.cuffSafe = p.hackSafe = false;
+    });
+    if (freed.length) this.emit({ t: 'statusClear', freed });
     this.decision = null;
   }
 
