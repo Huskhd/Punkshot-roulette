@@ -3,7 +3,9 @@
 // then snaps to the authoritative snapshot (sync) so it can't drift.
 import {
   THREE, snapUniform, tickGlow, animate, wait, ease, moveTo, turnTo, scaleTo, tickAnims, finishAll, lookQuat, quatFromEuler, basic,
+  setSpeedBoost, effectiveSpeed,
 } from './gfx.js';
+import { roundSpeed } from './engine.js';
 import * as M from './models.js';
 import { sfx } from './audio.js';
 import { t, itemName, charName } from './i18n.js';
@@ -18,6 +20,20 @@ const STATUS_ORDER = ['doll', 'saw', 'insured', 'double', 'hacked'];
 const STATUS_ITEM = { doll: 'doll', saw: 'saw', insured: 'insurance', double: 'double', hacked: 'hack' };
 const V3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
 const UP = V3(0, 1, 0);
+const CHAIN_LINKS = 14;
+
+// Rotation taking two local axes (a, then b made perpendicular to it) onto two world axes.
+function basisOf(a, b) {
+  const x = a.clone().normalize();
+  const y = b.clone().addScaledVector(x, -b.dot(x)).normalize();
+  return new THREE.Matrix4().makeBasis(x, y, x.clone().cross(y));
+}
+function alignQuat(la, lb, wa, wb) {
+  const L = basisOf(la, lb).transpose();
+  return new THREE.Quaternion().setFromRotationMatrix(basisOf(wa, wb).multiply(L));
+}
+// any horizontal direction perpendicular to v
+function across(v) { const c = v.clone().cross(UP); return c.lengthSq() < 1e-6 ? V3(1, 0, 0) : c.normalize(); }
 
 export class TableView {
   constructor(canvas, ui) {
@@ -153,6 +169,7 @@ export class TableView {
       }
       if (p.cuffs) this.updateChain(p);
     }
+    this.tickGlitch(t0);
     if (tr && tr.gun) {
       const b = this.gun.userData.body;
       b.position.set((Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.008);
@@ -309,6 +326,8 @@ export class TableView {
       if (p.cuffs) this.scene.remove(p.cuffs.chain);
     }
     this.P = [];
+    setSpeedBoost(1);
+    if (this.ui && this.ui.veil) this.ui.veil(0); // in case we left mid-blackout
     for (const m of this.itemMeshes.values()) m.parent && m.parent.remove(m);
     this.itemMeshes.clear();
     this.clearSpent(true);
@@ -399,8 +418,18 @@ export class TableView {
 
   slotPos(i, slot) { return this.P[i].seat.at(SLOT_ROWS[Math.floor(slot / SLOT_N)], SLOT_COLS[slot % SLOT_N], TY); }
   slotQuat(i, slot) { return quatFromEuler(0, this.P[i].seat.a + (((slot * 37) % 7) - 3) * 0.05, 0); }
+  // Items are a wrapper group (moved around by the game) holding the model (free to wobble/glitch).
+  wrapItem(id) {
+    const model = M.makeItem(id);
+    const m = new THREE.Group();
+    m.add(model);
+    m.userData.model = model;
+    m.userData.itemId = id;
+    return m;
+  }
+  mdl(m) { return m.userData.model || m; }
   makeItemMesh(id, uid) {
-    const m = M.makeItem(id);
+    const m = this.wrapItem(id);
     m.userData.uid = uid;
     m.userData.pick = { kind: 'item', uid };
     m.add(this.hitBox());
@@ -431,6 +460,7 @@ export class TableView {
     if (!snap || !this.P.length) return;
     this.vs = JSON.parse(JSON.stringify(snap));
     this.stopTremble();
+    setSpeedBoost(roundSpeed(snap.round));
     snap.players.forEach((pl, i) => {
       const P = this.P[i];
       if (!P) return;
@@ -473,6 +503,7 @@ export class TableView {
       h.quaternion.copy(P.restQ);
       h.scale.setScalar(1.25);
       M.setCurl(h, 0);
+      if (h.userData.gloved) M.setHandMaterial(h, null);
       h.visible = P.alive;
     }));
     if (!trayPhase && this.camMode === 'seat' && !this.targeting && !this.itemPick) this.camHomeNow();
@@ -516,7 +547,8 @@ export class TableView {
         h.add(ring);
         return ring;
       });
-      const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 1, 4), this.chainMat);
+      const chain = new THREE.Group();
+      for (let k = 0; k < CHAIN_LINKS; k++) chain.add(M.makeChainLink(this.chainMat));
       this.scene.add(chain);
       P.cuffs = { rings, chain };
       this.updateChain(P);
@@ -529,17 +561,71 @@ export class TableView {
       else rings.forEach((r) => scaleTo(r, 2.2, 0.25, ease.out).then(() => r.parent && r.parent.remove(r)));
     }
   }
+  // A chain of alternating links hangs between the two cuffs, sagging (and lying on the table when it can't).
   updateChain(P) {
+    const c = P.cuffs.chain;
+    c.visible = P.cuffs.rings[0].parent.visible !== false && P.alive;
+    if (!c.visible) return;
     const a = P.cuffs.rings[0].getWorldPosition(V3());
     const b = P.cuffs.rings[1].getWorldPosition(V3());
-    const c = P.cuffs.chain;
-    c.position.copy(a).add(b).multiplyScalar(0.5);
-    c.position.y -= 0.01;
-    const dir = b.clone().sub(a);
-    const len = dir.length();
-    c.scale.set(1, Math.max(0.01, len), 1);
-    if (len > 1e-4) c.quaternion.setFromUnitVectors(UP, dir.normalize());
-    c.visible = P.cuffs.rings[0].parent.visible !== false && P.alive;
+    const len = a.distanceTo(b);
+    const sag = 0.04 + Math.max(0, 0.8 - len) * 0.35;
+    const at = (t) => { const p = a.clone().lerp(b, t); p.y = Math.max(TY + 0.007, p.y - sag * 4 * t * (1 - t)); return p; };
+    const step = len / CHAIN_LINKS;
+    const stretch = Math.max(0.7, Math.min(2.2, step / 0.03));
+    const tw = new THREE.Quaternion();
+    c.children.forEach((l, i) => {
+      const t = (i + 0.5) / CHAIN_LINKS;
+      const p = at(t);
+      const tan = at(Math.min(1, t + 0.02)).sub(at(Math.max(0, t - 0.02)));
+      l.position.copy(p);
+      if (tan.lengthSq() > 1e-9) l.quaternion.setFromUnitVectors(UP, tan.normalize());
+      if (i % 2) l.quaternion.multiply(tw.setFromAxisAngle(UP, Math.PI / 2));
+      l.scale.set(1, stretch, 1);
+    });
+  }
+
+  // ---------------- hacked: the owner's items glitch on the table ----------------
+  tickGlitch(t0) {
+    const vs = this.vs;
+    if (!vs) return;
+    for (const m of this.itemMeshes.values()) {
+      const md = m.userData.model;
+      if (!md) continue;
+      const pl = vs.players[m.userData.owner];
+      const on = !!(pl && pl.alive && (pl.hacked || pl.jammed) && m.visible && m.parent === this.scene);
+      if (!on) { if (m.userData.glitch) this.unglitch(m); continue; }
+      let G = m.userData.glitch;
+      if (!G) {
+        if (!this._ghostMats) this._ghostMats = [0x30f0ff, 0xff30c0].map((c) => basic(c, { transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+        const ghosts = this._ghostMats.map((mat) => {
+          const gh = M.makeItem(md.userData.itemId, { glow: false });
+          gh.traverse((o) => { if (o.isMesh) { o.material = mat; o.castShadow = false; o.userData.glow = true; } });
+          gh.visible = false;
+          m.add(gh);
+          return gh;
+        });
+        G = m.userData.glitch = { ghosts, next: 0 };
+      }
+      if (t0 < G.next) continue;
+      G.next = t0 + 0.04 + Math.random() * 0.14;
+      const burst = Math.random() < 0.35;
+      md.position.set(burst ? (Math.random() - 0.5) * 0.035 : 0, 0, burst ? (Math.random() - 0.5) * 0.02 : 0);
+      md.scale.set(burst && Math.random() < 0.5 ? 1.35 : 1, Math.random() < 0.15 ? 0.55 : 1, 1);
+      md.visible = Math.random() > 0.1;
+      G.ghosts.forEach((gh, i) => {
+        gh.visible = burst || Math.random() < 0.25;
+        gh.position.set((i ? 1 : -1) * (0.006 + Math.random() * 0.018), (Math.random() - 0.5) * 0.006, (Math.random() - 0.5) * 0.01);
+        gh.scale.set(1, Math.random() < 0.3 ? 0.5 + Math.random() * 0.4 : 1, 1);
+      });
+    }
+  }
+  unglitch(m) {
+    const G = m.userData.glitch;
+    m.userData.glitch = null;
+    if (G) G.ghosts.forEach((gh) => m.remove(gh));
+    const md = m.userData.model;
+    if (md) { md.position.set(0, 0, 0); md.scale.set(1, 1, 1); md.visible = true; }
   }
 
   // ---------------- tray ----------------
@@ -584,7 +670,7 @@ export class TableView {
     }
   }
   makeTrayItem(x, shop, p, scale) {
-    const m = M.makeItem(x.id);
+    const m = this.wrapItem(x.id);
     m.userData.uid = x.uid;
     m.userData.pick = { kind: 'tray', uid: x.uid };
     m.add(this.hitBox());
@@ -749,13 +835,170 @@ export class TableView {
     const c0 = hand.userData.curl;
     await animate(dur, (e) => M.setCurl(hand, c0 + (to - c0) * e));
   }
+  // ---------- grabbing, holding and posing items ----------
+  // Bounds of what's actually drawn (not the tap hitbox or the rarity halo).
+  itemBox(m) {
+    m.updateMatrixWorld(true);
+    const bb = new THREE.Box3(), tmp = new THREE.Box3();
+    m.traverseVisible((o) => {
+      if (!o.isMesh || o.userData.hitbox || o.userData.glow || (o.material && o.material.transparent)) return;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      bb.union(tmp.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+    });
+    return bb;
+  }
+  // Where a hand takes hold: the model's handle if it names one, else the top middle.
+  gripPoint(m) {
+    const md = this.mdl(m);
+    if (md.userData.grip) return md.localToWorld(md.userData.grip.clone());
+    const bb = this.itemBox(m);
+    return V3((bb.min.x + bb.max.x) / 2, bb.max.y, (bb.min.z + bb.max.z) / 2);
+  }
+  // Reach over from the owner's side, fingers over the grip, close them (gently on flat things), lift.
+  async grab(P, m, k = 1, { dur = 0.34, lift = 0.1 } = {}) {
+    const hand = P.hands[k];
+    if (hand.parent !== this.scene) this.scene.attach(hand);
+    const gp = this.gripPoint(m);
+    const bb = this.itemBox(m);
+    const h = bb.isEmpty() ? 0.05 : bb.max.y - bb.min.y;
+    const dir = gp.clone().sub(P.seat.at(2.3, 0, gp.y));
+    dir.y = 0;
+    if (dir.lengthSq() < 1e-6) dir.copy(P.seat.d).negate();
+    dir.normalize();
+    const q = quatFromEuler(0, Math.atan2(dir.x, dir.z), 0);
+    const at = gp.clone().addScaledVector(dir, -0.1).add(V3(0, 0.02, 0));
+    at.y = Math.max(at.y, TY + 0.012);
+    await Promise.all([this.handTo(hand, at.clone().add(V3(0, 0.07, 0)), dur, 0.1, q), this.curl(hand, 0.2, dur)]);
+    await moveTo(hand, at, 0.08, { e: ease.out });
+    await this.curl(hand, h < 0.03 ? 0.25 : h < 0.06 ? 0.55 : 0.85, 0.1);
+    sfx('pickup');
+    hand.attach(m);
+    if (lift) await moveTo(hand, hand.position.clone().add(V3(0, lift, 0)), 0.12, { e: ease.out });
+    return hand;
+  }
+  // Move the hand so the item it holds ends up at pos / quat (the grip stays as it is).
+  async itemTo(hand, item, pos, quat, dur = 0.4, arc = 0.05) {
+    hand.updateMatrixWorld(true);
+    item.updateMatrixWorld(true);
+    const rel = item.matrixWorld.clone().invert().multiply(hand.matrixWorld);
+    const q = quat || item.getWorldQuaternion(new THREE.Quaternion());
+    const Mh = new THREE.Matrix4().compose(pos, q, item.getWorldScale(V3())).multiply(rel);
+    const p = V3(), hq = new THREE.Quaternion(), sc = V3();
+    Mh.decompose(p, hq, sc);
+    await this.handTo(hand, p, dur, arc, hq);
+  }
+  // Where the item's origin must go for its local point lp to touch the world point wp.
+  placeFor(item, lp, wp, quat) {
+    const q = quat || item.getWorldQuaternion(new THREE.Quaternion());
+    return wp.clone().sub(lp.clone().multiply(item.getWorldScale(V3())).applyQuaternion(q));
+  }
+  // let go of an item where it is (on the table, in the gun, ...)
+  async drop(hand, item, parent = this.scene) {
+    parent.attach(item);
+    await this.curl(hand, 0, 0.1);
+  }
+  // Hold an item out on an open palm (palm up, fingers cupped) at pos, turned to q; fingers point along fwd.
+  async presentTo(hand, item, pos, q, fwd, dur = 0.4) {
+    this.scene.attach(item);
+    const f = V3(fwd.x, 0, fwd.z).normalize();
+    const hq = quatFromEuler(0, Math.atan2(f.x, f.z), 0).multiply(quatFromEuler(0, 0, Math.PI));
+    const hp = pos.clone().addScaledVector(f, -0.03).add(V3(0, 0.012, 0));
+    const p0 = item.position.clone(), q0 = item.quaternion.clone();
+    await Promise.all([
+      this.handTo(hand, hp, dur, 0.05, hq),
+      animate(dur, (k) => { item.position.lerpVectors(p0, pos, k); item.quaternion.slerpQuaternions(q0, q, k); }),
+      this.curl(hand, 0.3, dur),
+    ]);
+    hand.attach(item);
+  }
+  // Hold something flat from behind: palm on its back, fingers along `up`, its front facing `front`.
+  async holdFromBack(hand, item, pos, q, front, up, dur = 0.45) {
+    this.scene.attach(item);
+    const back = front.clone().normalize().negate();
+    const hq = alignQuat(V3(0, 1, 0), V3(0, 0, 1), back, up);
+    const hp = pos.clone().addScaledVector(back, 0.026).addScaledVector(up, -0.1);
+    const p0 = item.position.clone(), q0 = item.quaternion.clone();
+    await Promise.all([
+      this.handTo(hand, hp, dur, 0.05, hq),
+      animate(dur, (k) => { item.position.lerpVectors(p0, pos, k); item.quaternion.slerpQuaternions(q0, q, k); }),
+      this.curl(hand, 0.35, dur),
+    ]);
+    hand.attach(item);
+  }
+  // Where a player shows something off: for you, close in front of the camera; for others, in front of them.
+  inspectPos(P, lat = 0, h = 0.35, dist = 1.35) {
+    if (P.idx === this.viewer && this.camMode === 'seat') {
+      const c = this.camHome();
+      const f = c.look.clone().sub(c.pos).normalize();
+      const right = f.clone().cross(UP).normalize();
+      return c.pos.clone().addScaledVector(f, dist).addScaledVector(right, lat * dist).add(V3(0, -0.16 * dist, 0));
+    }
+    return this.front(P, lat, h, 1.28);
+  }
+  // A spot in front of a player, above the table.
+  front(P, lat = 0, h = 0.3, r = 1.28) { return P.seat.at(r, lat, TY + h); }
+  // Chest: the character's for others; for you, a spot low in front of the camera you look down at.
+  chestPos(i) { return i === this.viewer ? this.P[i].seat.at(1.95, 0, TY + 0.46) : this.P[i].seat.at(M.SEAT_R - 0.33, 0, 1.28); }
+  // Lean the camera toward a point for a dramatic moment (goHome brings it back).
+  camFocus(pt, k = 0.3, dur = 0.5) {
+    if (this.camMode !== 'seat') return Promise.resolve();
+    const h = this.camHome();
+    return this.camTo(h.pos.clone().lerp(pt, k), h.look.clone().lerp(pt, Math.min(1, k * 1.8)), dur);
+  }
+  // Close-up: the camera swings down to look at pt from pt + offset.
+  closeUp(pt, offset, dur = 0.55) {
+    if (this.camMode !== 'seat') return Promise.resolve();
+    return this.camTo(pt.clone().add(offset), pt, dur);
+  }
+  sparks(pos, n = 7, color = 0xffc050) {
+    if (!this._sparkGeo) this._sparkGeo = new THREE.BoxGeometry(0.007, 0.007, 0.007);
+    for (let k = 0; k < n; k++) {
+      const s = new THREE.Mesh(this._sparkGeo, basic(color));
+      s.position.copy(pos);
+      this.scene.add(s);
+      const v = V3(Math.random() - 0.5, 0.3 + Math.random() * 0.6, Math.random() - 0.5).multiplyScalar(0.45);
+      const p0 = pos.clone();
+      animate(0.3 + Math.random() * 0.2, (k2) => { s.position.set(p0.x + v.x * k2, Math.max(TY, p0.y + v.y * k2 - 0.5 * k2 * k2), p0.z + v.z * k2); }, ease.linear)
+        .then(() => this.scene.remove(s));
+    }
+  }
+  hearts(pos, broken = false, n = 5, spread = 0.14) {
+    for (let k = 0; k < n; k++) {
+      const sp = M.makeHeart(broken);
+      const p0 = pos.clone().add(V3((Math.random() - 0.5) * spread, (Math.random() - 0.5) * spread * 0.4, (Math.random() - 0.5) * spread));
+      sp.position.copy(p0);
+      sp.material.opacity = 0;
+      this.scene.add(sp);
+      wait(k * 0.1).then(() => animate(broken ? 1.3 : 1.1, (e) => {
+        sp.position.set(p0.x + Math.sin(e * 6 + k) * 0.015, p0.y + e * (broken ? 0.08 : 0.28), p0.z);
+        sp.material.opacity = e < 0.15 ? e / 0.15 : 1 - Math.pow((e - 0.15) / 0.85, 2);
+        const s = 1 + Math.sin(e * Math.PI) * 0.4;
+        sp.scale.set(0.09 * s, 0.08 * s, 1);
+      }, ease.out)).then(() => { this.scene.remove(sp); sp.material.dispose(); });
+    }
+  }
+  // Pieces of the gun's barrel tip (and the second barrel's tip, if mounted) as a loose object,
+  // pivoting around the tip's middle so it can fall or be thrown.
+  cutPiece() {
+    const g = this.gun, gu = g.userData;
+    gu.body.updateMatrixWorld(true);
+    const piece = new THREE.Group();
+    piece.add(gu.tip.clone());
+    if (gu.extra.visible && gu.extraTip.visible) piece.add(gu.extraTip.clone());
+    piece.children.forEach((c) => { c.visible = true; });
+    piece.applyMatrix4(gu.body.matrixWorld);
+    const pivot = new THREE.Group();
+    pivot.position.copy(g.localToWorld(V3(0.0, 0.035, 0.52)));
+    this.scene.add(pivot);
+    pivot.attach(piece);
+    return pivot;
+  }
+  // lie there for a moment, then fade
+  litter(obj, after = 1.4) { wait(after).then(() => scaleTo(obj, 0.01, 0.4)).then(() => this.scene.remove(obj)); }
+
   async carryToSlot(P, mesh, owner, slot, handIdx = 1) {
     const hand = P.hands[handIdx];
-    const wp = mesh.getWorldPosition(V3());
-    await this.handTo(hand, wp.clone().add(V3(0, 0.05, 0)), 0.38, 0.12);
-    await this.curl(hand, 1);
-    sfx('pickup');
-    hand.attach(mesh);
+    await this.grab(P, mesh, handIdx, { lift: 0 });
     const dst = this.slotPos(owner, slot);
     await this.handTo(hand, dst.clone().add(V3(0, 0.05, 0)), 0.45, 0.25);
     this.scene.attach(mesh);
@@ -869,6 +1112,17 @@ export class TableView {
         const losers = e.losers.map((i) => (i === this.viewer ? t('you') : this.names[i])).join(', ');
         this.say(t('c_mgResult', { losers, k: e.dmg || 1 }), 3);
         await wait(1.4);
+        if (e.first) await this.duoFirst(e.first);
+        break;
+      }
+      case 'insuranceEnd': {
+        pl(e.player).insured = 0;
+        this.setStatus(e.player, 'insured', false);
+        this.puff(this.P[e.player].seat.at(0.8, 0.16 + STATUS_ORDER.indexOf('insured') * 0.1, TY + 0.05), 0xd8d0b8, 1.2);
+        sfx('paper');
+        this.say(t('c_insEnd', { a: this.A(e.player) }), 2.2);
+        this.hud();
+        await wait(1.0);
         break;
       }
       case 'roundEnd': {
@@ -904,7 +1158,11 @@ export class TableView {
     vs.round = e.round;
     vs.shellsLeft = e.total;
     this.clearSpent(false);
-    this.say(t('c_round', { r: e.round }), 1.6);
+    // every round plays a little faster than the last
+    const before = effectiveSpeed();
+    setSpeedBoost(roundSpeed(e.round));
+    const sp = effectiveSpeed();
+    this.say(sp > before + 0.01 ? t('c_roundFast', { r: e.round, s: Math.round(sp * 100) / 100 }) : t('c_round', { r: e.round }), 2);
     await wait(0.9);
     // Belt showcase: pops up right in front of the camera. The display order is
     // shuffled on its own — it says nothing about the order inside the gun.
@@ -1193,7 +1451,7 @@ export class TableView {
     const P = this.P[e.player];
     vs.players[e.player].hp = e.hp;
     if (e.via === 'insurance') {
-      vs.players[e.player].insured = false;
+      vs.players[e.player].insured = 0;
       this.setStatus(e.player, 'insured', false);
       this.say(t('c_reviveIns', { a: this.A(e.player) }), 2.6);
     } else {
@@ -1217,34 +1475,143 @@ export class TableView {
   }
 
   // ---------------- items ----------------
+  // Pocket Duo: the player who switched it on came first.
+  async duoFirst(f) {
+    const vs = this.vs;
+    const P = this.P[f.player];
+    const a = this.A(f.player);
+    if (f.amount > 0) {
+      vs.players[f.player].hp = f.hp;
+      sfx('heal');
+      P.candles.forEach((c, k) => this.lightCandle(c, k < f.hp));
+      this.hearts(this.aboveHead(f.player), false, 5);
+      this.say(t('c_mgFirst', { a, k: f.amount }), 2.6);
+    } else this.say(t(f.lastLife ? 'c_mgFirstLast' : 'c_mgFirstFull', { a }), 2.4);
+    this.hud();
+    await wait(1.3);
+  }
+  // over someone's head (for you: just in front of the camera)
+  aboveHead(i) {
+    if (i === this.viewer) {
+      const f = this.camLook.clone().sub(this.camPos).normalize();
+      return this.camPos.clone().addScaledVector(f, 0.75).add(V3(0, -0.05, 0));
+    }
+    return this.headPos(i).add(V3(0, 0.35, 0));
+  }
+
+  // Stick a held syringe (needle along its +y) into `target`, coming in from `from`, and push the plunger.
+  async inject(hand, syr, target, from) {
+    const su = syr.userData;
+    const dir = target.clone().sub(from).normalize();
+    const q = alignQuat(V3(0, 1, 0), V3(1, 0, 0), dir, across(dir));
+    const tip = su.tip.y * syr.getWorldScale(V3()).y;
+    const ready = target.clone().addScaledVector(dir, -(tip + 0.08));
+    const stuck = target.clone().addScaledVector(dir, -(tip - 0.025));
+    await this.itemTo(hand, syr, ready, q, 0.4, 0.05);
+    await this.itemTo(hand, syr, stuck, q, 0.09, 0);
+    sfx('needle');
+    this.shake(0.025);
+    const pl = su.plunger, liq = su.liquid, y0 = pl.position.y;
+    await Promise.all([
+      animate(0.55, (k) => { pl.position.y = y0 + 0.055 * k; liq.scale.y = Math.max(0.02, 1 - k); }),
+      this.curl(hand, 1.05, 0.55),
+    ]);
+    await wait(0.12);
+    await this.itemTo(hand, syr, ready, q, 0.15, 0);
+  }
+
+  // Someone else's character nods off for a moment (the drug), then comes to.
+  async slump(i, dur) {
+    const C = this.P[i].char.userData;
+    const b = C.body, h = C.head;
+    await animate(0.5, (k) => { b.rotation.x = 0.3 * k; h.rotation.x = 0.45 * k; }, ease.out);
+    await animate(dur, (k) => { b.rotation.x = 0.3 + Math.sin(k * Math.PI * 4) * 0.04; C.eyes.forEach((x) => { x.visible = Math.sin(k * 40) > 0.3; }); }, ease.linear);
+    C.eyes.forEach((x) => { x.visible = true; });
+    await animate(0.3, (k) => { b.rotation.x = 0.3 * (1 - k); h.rotation.x = 0.45 * (1 - k); }, ease.back);
+  }
+
+  // A rotting item: turns green, fumes and flies, then slumps into nothing.
+  async rot(im, delay = 0) {
+    if (delay) await wait(delay);
+    const mats = [], base = [];
+    const green = new THREE.Color(0x58761a);
+    im.traverse((o) => {
+      if (!o.isMesh || o.userData.hitbox || o.userData.glow || Array.isArray(o.material) || !o.material.color) return;
+      o.material = o.material.clone();
+      mats.push(o.material);
+      base.push(o.material.color.clone());
+    });
+    const fx = new THREE.Group();
+    fx.position.copy(im.getWorldPosition(V3()));
+    this.scene.add(fx);
+    if (!this._stinkMat) {
+      this._stinkMat = basic(0x9ad040, { transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide });
+      this._fumeGeo = new THREE.TorusGeometry(0.025, 0.004, 3, 8, Math.PI);
+      this._flyGeo = new THREE.BoxGeometry(0.008, 0.006, 0.008);
+    }
+    const fumes = [0, 1, 2].map((k) => { const f = new THREE.Mesh(this._fumeGeo, this._stinkMat.clone()); f.position.x = (k - 1) * 0.03; fx.add(f); return f; });
+    const flies = [0, 1, 2, 3].map(() => { const f = new THREE.Mesh(this._flyGeo, basic(0x0a0a0a)); fx.add(f); return f; });
+    sfx('buzz');
+    const s0 = im.scale.clone();
+    const r0 = im.rotation.z;
+    await animate(1.15, (k) => {
+      mats.forEach((mt, i) => mt.color.copy(base[i]).lerp(green, Math.min(1, k * 1.3) * 0.75));
+      fumes.forEach((f, i) => {
+        const c = (k * 1.6 + i / 3) % 1;
+        f.position.y = 0.06 + c * 0.22;
+        f.rotation.set(0, i, Math.sin(k * 14 + i) * 0.6 + (i % 2) * Math.PI);
+        f.material.opacity = 0.65 * Math.sin(c * Math.PI);
+      });
+      flies.forEach((f, i) => {
+        const ang = k * 22 + (i * Math.PI) / 2;
+        f.position.set(Math.cos(ang) * (0.07 + i * 0.01), 0.07 + Math.sin(k * 31 + i * 2) * 0.03, Math.sin(ang) * (0.07 + i * 0.01));
+      });
+      im.rotation.z = r0 + Math.sin(k * 30) * 0.06 * k;
+    }, ease.linear);
+    this.puff(fx.position.clone().add(V3(0, 0.05, 0)), 0x7aa030, 1.4);
+    await animate(0.4, (k) => im.scale.set(s0.x * (1 + 0.35 * k), s0.y * (1 - 0.97 * k), s0.z * (1 + 0.35 * k)), ease.in);
+    im.parent && im.parent.remove(im);
+    this.scene.remove(fx);
+    mats.forEach((mt) => mt.dispose());
+    fumes.forEach((f) => f.material.dispose());
+  }
+
   async useItem(e) {
     const vs = this.vs;
     const P = this.P[e.player];
     const a = this.A(e.player);
+    const me = e.player === this.viewer;
     vs.players[e.player].slots[e.slot] = null;
     let m = this.itemMeshes.get(e.uid);
     this.itemMeshes.delete(e.uid);
     if (!m) { m = this.makeItemMesh(e.id, e.uid); this.placeItem(m, e.player, e.slot); this.scene.add(m); }
+    this.unglitch(m);
     m.userData.pick = null;
+    const u = this.mdl(m).userData;
     const hand = P.hands[1];
-    const wp = m.getWorldPosition(V3());
-    await this.handTo(hand, wp.add(V3(0, 0.05, 0)), 0.35, 0.1);
-    await this.curl(hand, 1);
-    sfx('pickup');
-    hand.attach(m);
-    await this.handTo(hand, P.seat.at(1.25, 0.08, TY + 0.4), 0.35, 0.05);
+    const L = P.hands[0];
+    await this.grab(P, m, 1);
+    await this.handTo(hand, this.front(P, 0.08, 0.4, 1.25), 0.32, 0.05);
     this.say(t('c_uses', { a, item: itemName(e.id) }), 2);
     let keep = false;
-    const gunTop = () => this.gun.position.clone().add(V3(0, 0.12, 0));
-    const tipPos = () => this.gun.localToWorld(V3(0, 0.035, 0.42));
     const vanish = async () => { await scaleTo(m, 0.01, 0.25, ease.in); m.parent && m.parent.remove(m); };
-    const toFace = () => (e.player === this.viewer
+    const g = this.gun;
+    const gunPt = (x, y, z) => g.localToWorld(V3(x, y, z));
+    const facing = quatFromEuler(0, P.seat.a, 0); // an item's +z turned toward its owner
+    const inward = quatFromEuler(0, P.seat.faceIn, 0); // ...or toward the middle of the table
+    const heldQ = () => m.getWorldQuaternion(new THREE.Quaternion());
+    const toFace = () => (me
       ? this.camPos.clone().add(V3(0, -0.4, 0)).lerp(V3(0, TY, 0), 0.2)
       : this.headPos(e.player).lerp(V3(0, TY, 0), 0.25));
 
     switch (e.id) {
       case 'stethoscope': {
-        await this.handTo(hand, gunTop(), 0.4, 0.1);
+        // the chest piece goes flat on top of the receiver
+        const spot = gunPt(0, 0.01, -0.05);
+        spot.y = this.itemBox(g).max.y;
+        const q = heldQ();
+        await this.itemTo(hand, m, this.placeFor(m, u.chest, spot.clone().add(V3(0, 0.06, 0)), q), q, 0.4, 0.08);
+        await this.itemTo(hand, m, this.placeFor(m, u.chest, spot, q), q, 0.12, 0);
         await wait(0.3);
         if (e.secret) {
           // only the user hears it: a heartbeat for a live shell, silence for a blank
@@ -1259,84 +1626,312 @@ export class TableView {
         break;
       }
       case 'prybar': {
-        await this.handTo(hand, gunTop(), 0.4, 0.1);
-        await animate(0.3, (k) => { m.rotation.z = -k * 0.8; });
+        // claw into the ejection port, then lean on the handle
+        const port = g.localToWorld(g.userData.port.clone());
+        const q0 = heldQ();
+        await this.itemTo(hand, m, this.placeFor(m, u.claw, port.clone().add(V3(0, 0.05, 0)), q0), q0, 0.4, 0.08);
+        await this.itemTo(hand, m, this.placeFor(m, u.claw, port, q0), q0, 0.12, 0);
+        const bar = V3(1, 0, 0).applyQuaternion(q0);
+        const q1 = new THREE.Quaternion().setFromAxisAngle(across(bar).negate(), 0.5).multiply(q0);
+        sfx('clang');
+        await this.itemTo(hand, m, this.placeFor(m, u.claw, port, q1), q1, 0.28, 0);
         sfx('rack');
         this.shake(0.03);
         this.ejectShell(e.shell, 0);
         vs.shellsLeft = e.shellsLeft;
         this.say(t('c_pry', { a, live: e.shell }), 2.6);
-        await wait(1.0);
+        await this.itemTo(hand, m, this.placeFor(m, u.claw, port.clone().add(V3(0, 0.08, 0)), q0), q0, 0.25, 0);
+        await wait(0.7);
         break;
       }
       case 'saw': {
-        // saw across the barrel, then the tip drops off
-        const tp = tipPos();
-        const side = V3().subVectors(tp, this.gun.position).cross(UP).normalize().multiplyScalar(0.06);
-        await this.handTo(hand, tp.clone().add(V3(0, 0.06, 0)), 0.4, 0.1);
-        for (let k = 0; k < 5; k++) {
+        // the other hand pins the gun; the saw stands on its edge across the barrel and cuts down through it
+        const A = V3(0, 0, 1).applyQuaternion(g.getWorldQuaternion(new THREE.Quaternion())).normalize();
+        this.closeUp(gunPt(0, 0.035, 0.38), A.clone().multiplyScalar(0.38).addScaledVector(P.seat.d, -0.42).add(V3(0, 0.5, 0)), 0.6);
+        const side = across(A);
+        if (side.dot(P.seat.d) > 0) side.negate(); // the handle (at the saw's -x) points back at its owner
+        const qs = alignQuat(V3(1, 0, 0), V3(0, 0, 1), side, UP); // blade along `side`, teeth (-z) down
+        const cut = gunPt(0, 0.035, 0.42);
+        const topY = this.itemBox(g).max.y;
+        const teeth = V3(0.02, 0.004, -0.03);
+        const start = V3(cut.x, topY + 0.004, cut.z);
+        const end = V3(cut.x, Math.max(TY + 0.008, cut.y - 0.03), cut.z);
+        const hold = gunPt(0, 0.0, -0.1);
+        hold.y = topY;
+        await Promise.all([
+          this.handTo(L, hold.clone().addScaledVector(P.seat.d, 0.1).add(V3(0, 0.06, 0)), 0.35, 0.08, inward),
+          this.itemTo(hand, m, this.placeFor(m, teeth, start.clone().add(V3(0, 0.07, 0)), qs), qs, 0.45, 0.1),
+        ]);
+        await Promise.all([
+          moveTo(L, hold.clone().addScaledVector(P.seat.d, 0.1).add(V3(0, 0.012, 0)), 0.12),
+          this.curl(L, 0.45, 0.12),
+          this.itemTo(hand, m, this.placeFor(m, teeth, start, qs), qs, 0.15, 0),
+        ]);
+        const h0 = hand.position.clone();
+        const strokes = 8;
+        const drop = start.y - end.y;
+        for (let k = 0; k < strokes; k++) {
           sfx('saw');
-          await moveTo(hand, tp.clone().add(V3(0, 0.06, 0)).add(side), 0.09, { e: ease.linear });
-          await moveTo(hand, tp.clone().add(V3(0, 0.06, 0)).sub(side), 0.09, { e: ease.linear });
+          const dy = (-drop * (k + 1)) / strokes;
+          await moveTo(hand, h0.clone().add(V3(0, dy, 0)).addScaledVector(side, (k % 2 ? -1 : 1) * 0.07), 0.1, { e: ease.linear });
+          this.sparks(V3(cut.x, start.y + dy, cut.z), 4);
+          this.shake(0.006);
         }
+        // the tip breaks free and drops onto the table
+        let piece = null;
+        if (g.userData.tip.visible) piece = this.cutPiece();
         vs.players[e.player].saw = true;
         this.gunState(vs);
-        const piece = M.makeBarrelTip();
-        piece.position.copy(this.gun.localToWorld(V3(0, 0.035, 0.52)));
-        piece.quaternion.copy(this.gun.quaternion);
-        piece.scale.setScalar(1.1);
-        this.scene.add(piece);
-        const p0 = piece.position.clone();
-        sfx('thud');
-        await animate(0.4, (k) => { piece.position.set(p0.x, p0.y - k * 0.03 + Math.sin(k * Math.PI) * 0.05, p0.z); piece.rotation.y += 0.1; }, ease.out);
+        sfx('crack');
+        if (piece) {
+          const p0 = piece.position.clone();
+          const dst = p0.clone().addScaledVector(A, 0.07);
+          dst.y = TY + 0.026;
+          await animate(0.35, (k) => {
+            piece.position.lerpVectors(p0, dst, k);
+            piece.position.y = p0.y + (dst.y - p0.y) * k * k;
+            piece.rotation.y = k * 0.5;
+          }, ease.linear);
+          sfx('thud');
+          this.litter(piece, 1.4);
+        }
         this.say(t('c_saw', { a }), 2.6);
+        this.handHome(P, 0, 0.35);
+        await this.itemTo(hand, m, this.placeFor(m, teeth, start.clone().add(V3(0, 0.1, 0)), qs), qs, 0.25, 0);
         await vanish();
         keep = true;
         this.setStatus(e.player, 'saw', true);
-        setTimeout(() => scaleTo(piece, 0.01, 0.4).then(() => this.scene.remove(piece)), 1500);
         await wait(0.4);
         break;
       }
-      case 'bandage': case 'medkit': {
-        await this.handTo(hand, toFace(), 0.4, 0.05);
-        await animate(0.5, (k) => { m.rotation.y = k * 8; });
+      case 'bandage': {
+        // the other hand comes up, fingers raised; the roll circles it, winding a bandage up around the palm
+        const lp = this.inspectPos(P, -0.1, 0.22);
+        if (!me) this.camFocus(lp, 0.25);
+        const lq = inward.clone().multiply(quatFromEuler(-Math.PI / 2, 0, 0));
+        await Promise.all([
+          this.handTo(L, lp, 0.4, 0.08, lq),
+          this.itemTo(hand, m, lp.clone().add(V3(0, -0.05, 0)).addScaledVector(P.seat.r, 0.2), null, 0.4, 0.05),
+        ]);
+        L.updateMatrixWorld(true);
+        const wrap = M.makeWrap();
+        L.add(wrap);
+        const ax1 = V3(0, 1, 0).applyQuaternion(L.quaternion), ax2 = V3(1, 0, 0).applyQuaternion(L.quaternion);
+        // the working hand lets the roll go and pins the loose end to the back of the raised hand (far side)
+        this.scene.attach(m);
+        const pin = L.localToWorld(V3(0, -0.04, -0.02));
+        const pinDir = V3(0, 0, 1).applyQuaternion(inward);
+        this.handTo(hand, pin.clone().addScaledVector(pinDir, 0.02).addScaledVector(P.seat.r, 0.12).add(V3(0, 0.02, 0)), 0.3, 0.05,
+          quatFromEuler(0, Math.atan2(-P.seat.r.x, -P.seat.r.z), 0)).then(() => this.curl(hand, 0.45, 0.12));
+        if (!this._stripMat) this._stripMat = M.makeWrap().material;
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), this._stripMat);
+        this.scene.add(strip);
+        const len = wrap.userData.len;
+        const s0 = m.scale.x;
+        const q0 = m.quaternion.clone();
+        let lastTurn = -1;
+        await animate(1.5, (k) => {
+          const ang = k * Math.PI * 6;
+          const c = L.localToWorld(V3(0, 0.03, -0.1 + k * len));
+          m.position.copy(c).addScaledVector(ax1, Math.cos(ang) * 0.13).addScaledVector(ax2, Math.sin(ang) * 0.19).add(V3(0, -0.03, 0));
+          m.quaternion.copy(q0);
+          m.rotateY(ang);
+          wrap.scale.y = Math.max(0.001, k * len);
+          wrap.position.z = -0.1 + (k * len) / 2;
+          m.scale.setScalar(s0 * (1 - 0.5 * k));
+          const rp = m.getWorldPosition(V3()).add(V3(0, 0.04, 0));
+          const surf = c.clone().lerp(rp, 0.4);
+          strip.position.copy(rp).add(surf).multiplyScalar(0.5);
+          strip.lookAt(surf);
+          strip.scale.set(0.06, 0.004, Math.max(0.001, rp.distanceTo(surf)));
+          const turn = Math.floor(k * 6);
+          if (turn !== lastTurn) { lastTurn = turn; sfx('cloth'); }
+        }, ease.inOut);
+        this.scene.remove(strip);
+        strip.geometry.dispose();
+        await vanish();
+        keep = true;
         sfx('heal');
         vs.players[e.player].hp = e.hp;
         P.candles.forEach((c, k) => this.lightCandle(c, k < e.hp));
         this.say(t('c_heal', { a, k: e.amount }), 2.2);
+        const lq0 = L.quaternion.clone(), hq = new THREE.Quaternion();
+        this.handHome(P, 1, 0.35);
+        await animate(0.45, (k) => { L.quaternion.copy(lq0).multiply(hq.setFromEuler(new THREE.Euler(0, 0, Math.sin(k * Math.PI * 2) * 0.35))); M.setCurl(L, Math.sin(k * Math.PI) * 0.7); });
+        await wait(0.3);
+        await Promise.all([this.handHome(P, 0, 0.35), wait(0.2).then(() => scaleTo(wrap, 0.001, 0.3))]);
+        L.remove(wrap);
+        break;
+      }
+      case 'medkit': {
+        // set it down, flip the lid, take the red dose out and jab it into the chest
+        const spot = P.seat.at(1.24, 0.03, TY);
+        this.camFocus(spot, 0.3);
+        await this.itemTo(hand, m, spot, facing, 0.4, 0.08);
+        sfx('thud');
+        await this.drop(hand, m);
+        moveTo(hand, hand.position.clone().add(V3(0, 0.09, 0)).addScaledVector(P.seat.d, 0.06), 0.2);
+        const kit = this.mdl(m);
+        const lid = u.lid;
+        const lidFront = () => kit.localToWorld(u.lidFront.clone());
+        const grip = () => lidFront().addScaledVector(P.seat.d, 0.09).add(V3(0, 0.02, 0));
+        await this.handTo(L, grip().add(V3(0, 0.05, 0)), 0.3, 0.06, inward);
+        await moveTo(L, grip(), 0.08);
+        await this.curl(L, 0.55, 0.08);
+        sfx('lock');
+        const off = L.position.clone().sub(lidFront());
+        await animate(0.45, (k) => { lid.rotation.x = -1.95 * k; L.position.copy(lidFront()).add(off); }, ease.out);
+        this.say(t('c_medkitOpen', { a }), 1.8);
+        this.handHome(P, 0, 0.35);
+        // the dose rises out of the kit
+        const syr = u.syr;
+        const y0 = syr.position.y, s0 = syr.scale.x, ry = syr.rotation.y;
+        sfx('shimmer');
+        await animate(0.25, (k) => { syr.position.y = y0 + k * 0.05; }, ease.out);
+        await animate(0.2, (k) => { syr.scale.setScalar(s0 + (1.25 - s0) * k); syr.rotation.y = ry * (1 - k); });
+        await this.grab(P, syr, 1, { lift: 0.06 });
+        const chest = this.chestPos(e.player);
+        if (me) this.camTo(this.camPos.clone(), this.camLook.clone().lerp(chest, 0.55), 0.4);
+        await this.inject(hand, syr, chest, me ? P.seat.at(1.8, 0.4, TY + 0.6) : P.seat.at(2.0, 0.35, 1.34));
+        sfx('heal');
+        vs.players[e.player].hp = e.hp;
+        P.candles.forEach((c, k) => this.lightCandle(c, k < e.hp));
+        this.say(t('c_heal', { a, k: e.amount }), 2.2);
+        await scaleTo(syr, 0.01, 0.2, ease.in);
+        syr.parent && syr.parent.remove(syr);
+        await animate(0.25, (k) => { lid.rotation.x = -1.95 * (1 - k); }, ease.in);
+        sfx('lock');
+        this.puff(m.position.clone().add(V3(0, 0.06, 0)), 0xf0ece0, 1.4);
+        await vanish();
+        keep = true;
+        break;
+      }
+      case 'doll': {
+        // squeeze it: the body squashes and the head balloons up
+        const F = this.inspectPos(P, 0.05, 0.3, 1.05);
+        if (!me) this.camFocus(F, 0.25);
+        const toViewer = me ? quatFromEuler(0, Math.atan2(this.camPos.x - F.x, this.camPos.z - F.z), 0) : facing;
+        await this.presentTo(hand, m, F, toViewer, P.seat.d.clone().negate(), 0.4);
+        const body = u.body, head = u.head;
+        sfx('squish');
+        await Promise.all([
+          this.curl(hand, 1.2, 0.2),
+          animate(0.22, (k) => {
+            body.scale.set(1 + 0.35 * k, 1 - 0.45 * k, 1 + 0.35 * k);
+            head.position.y = 0.075 - 0.028 * k;
+            head.scale.setScalar(1 + 1.15 * k);
+          }, ease.out),
+        ]);
+        this.shake(0.02);
+        await animate(0.5, (k) => { head.scale.set(2.15 + Math.sin(k * Math.PI * 5) * 0.25 * (1 - k), 2.15 - Math.sin(k * Math.PI * 5) * 0.2 * (1 - k), 2.15); }, ease.linear);
+        sfx('zap');
+        this.puff(head.getWorldPosition(V3()), 0xa040e0, 1.6);
+        await Promise.all([
+          this.curl(hand, 0.3, 0.15),
+          animate(0.4, (k) => {
+            const b = ease.back(k);
+            body.scale.set(1.35 - 0.35 * b, 0.55 + 0.45 * b, 1.35 - 0.35 * b);
+            head.position.y = 0.047 + 0.028 * b;
+            head.scale.setScalar(2.15 - 1.15 * b);
+          }, ease.linear),
+        ]);
+        const k = STATUS_ORDER.indexOf('doll');
+        this.scene.attach(m);
+        await Promise.all([moveTo(m, P.seat.at(0.8, 0.16 + k * 0.1, TY), 0.4, { arc: 0.15 }), turnTo(m, quatFromEuler(0, P.seat.a, 0), 0.4), this.handHome(P, 1, 0.4)]);
+        this.say(t('c_doll', { a }), 3);
+        vs.players[e.player].doll = true;
+        m.parent && m.parent.remove(m);
+        this.setStatus(e.player, 'doll', true, true);
+        keep = true;
         await wait(0.6);
         break;
       }
-      case 'doll': case 'insurance': {
-        const key = e.id === 'insurance' ? 'insured' : 'doll';
-        const k = STATUS_ORDER.indexOf(key);
-        await this.handTo(hand, P.seat.at(0.8, 0.16 + k * 0.1, TY + 0.1), 0.4, 0.1);
-        sfx(e.id === 'insurance' ? 'paper' : 'zap');
-        this.say(t(key === 'doll' ? 'c_doll' : 'c_insured', { a }), 3);
-        vs.players[e.player][key] = true;
+      case 'insurance': {
+        // lay the policy down, scribble a signature and stamp it
+        const k = STATUS_ORDER.indexOf('insured');
+        const spot = P.seat.at(0.8, 0.16 + k * 0.1, TY);
+        await this.itemTo(hand, m, spot, facing, 0.4, 0.1);
+        await this.drop(hand, m);
+        const h0 = hand.position.clone().add(V3(0, 0.035, 0));
+        await moveTo(hand, h0, 0.1);
+        sfx('paper');
+        for (let i = 0; i < 5; i++) await moveTo(hand, h0.clone().addScaledVector(P.seat.r, (i % 2 ? -1 : 1) * 0.035).addScaledVector(P.seat.d, -0.008 * i), 0.07, { e: ease.linear });
+        await moveTo(hand, h0.clone().add(V3(0, 0.08, 0)), 0.12, { e: ease.out });
+        await moveTo(hand, h0.clone().add(V3(0, -0.015, 0)), 0.07, { e: ease.in });
+        sfx('thud');
+        this.shake(0.015);
+        if (u.seal) animate(0.3, (s) => u.seal.scale.setScalar(1 + Math.sin(s * Math.PI) * 0.6));
+        this.say(t('c_insured', { a, k: e.rounds || 3 }), 3);
+        vs.players[e.player].insured = e.rounds || 3;
+        await wait(0.3);
         m.parent && m.parent.remove(m);
-        this.setStatus(e.player, key, true, true);
+        this.setStatus(e.player, 'insured', true, true);
         keep = true;
-        await wait(0.9);
+        await wait(0.6);
         break;
       }
       case 'double': {
-        // power-up: the gun swells and shrinks a few times and grows a second barrel
-        await this.handTo(hand, gunTop(), 0.4, 0.1);
-        await vanish();
+        // one hand snaps the front of the barrel off, the other mounts the double barrel in its place
+        const gu = g.userData;
+        const gq = g.getWorldQuaternion(new THREE.Quaternion());
+        this.closeUp(gunPt(0, 0.035, 0.4), V3(0, 0, 1).applyQuaternion(gq).multiplyScalar(0.55).addScaledVector(P.seat.d, 0.5).add(V3(0, 0.5, 0)), 0.6);
+        const kk = m.getWorldScale(V3()).x / g.getWorldScale(V3()).x;
+        const mount = () => gunPt(0.023, 0.035 - 0.016 * kk, 0.58 - 0.02 * kk);
+        const tipW = gunPt(0, 0.035, 0.54);
+        await Promise.all([
+          this.itemTo(hand, m, mount().add(V3(0, 0.2, 0)).addScaledVector(P.seat.d, 0.08), gq, 0.45, 0.1),
+          this.handTo(L, tipW.clone().addScaledVector(P.seat.d, 0.09).add(V3(0, 0.07, 0)), 0.4, 0.08, inward),
+        ]);
+        await moveTo(L, tipW.clone().addScaledVector(P.seat.d, 0.09).add(V3(0, 0.02, 0)), 0.08);
+        await this.curl(L, 0.8, 0.1);
+        await animate(0.25, (k) => { g.userData.body.rotation.x = Math.sin(k * Math.PI * 3) * 0.04 * (1 - k); });
+        sfx('crack');
+        this.shake(0.07);
+        this.sparks(tipW, 9);
+        let piece = null;
+        if (gu.tip.visible) {
+          piece = this.cutPiece();
+          gu.tip.visible = false;
+          gu.extraTip.visible = false;
+          L.attach(piece);
+        }
+        await moveTo(L, L.position.clone().add(V3(0, 0.16, 0)).addScaledVector(P.seat.d, 0.04), 0.14, { e: ease.out });
+        if (piece) {
+          this.scene.attach(piece);
+          const p0 = piece.position.clone();
+          const dst = P.seat.at(0.95, -0.42, TY + 0.026);
+          const q0 = piece.quaternion.clone();
+          animate(0.55, (k) => {
+            piece.position.lerpVectors(p0, dst, k);
+            piece.position.y += Math.sin(k * Math.PI) * 0.2;
+            piece.quaternion.copy(q0);
+            piece.rotateY(k * 5);
+          }, ease.linear).then(() => { sfx('thud'); this.litter(piece, 1.2); });
+        }
+        this.curl(L, 0, 0.1);
+        this.handHome(P, 0, 0.4);
+        // slide the new barrels on
+        await this.itemTo(hand, m, mount().addScaledVector(V3(0, 0, 1).applyQuaternion(gq), 0.12), gq, 0.3, 0.04);
+        await this.itemTo(hand, m, mount(), gq, 0.14, 0);
+        sfx('lock');
+        this.shake(0.02);
+        await this.drop(hand, m, g);
         keep = true;
-        const g = this.gun;
+        this.handHome(P, 1, 0.35);
+        // power-up, Mario style: the gun swells and flickers between the bolted-on barrels and its new form
         const p0 = g.position.clone();
         await moveTo(g, p0.clone().add(V3(0, 0.18, 0)), 0.25, { e: ease.out });
         sfx('powerup');
+        const sawn = vs.players.some((q) => q.alive && q.saw);
         const seq = [1.45, 1.1, 1.6, 1.1, 1.75, 1.1];
-        const ex = g.userData.extra;
         for (let i = 0; i < seq.length; i++) {
           g.scale.setScalar(seq[i]);
-          ex.visible = i % 2 === 0;
+          const big = i % 2 === 0;
+          M.setGunState(g, { saw: sawn || !big, double: big });
+          m.visible = !big;
           await wait(0.11);
         }
-        ex.visible = true;
+        m.parent && m.parent.remove(m);
         vs.players[e.player].double = true;
         this.gunState(vs);
         this.say(t('c_double', { a }), 2.6);
@@ -1349,8 +1944,9 @@ export class TableView {
       }
       case 'shield': {
         const n = e.shield;
-        await this.handTo(hand, P.seat.at(0.64, -0.14 - (n - 1) * 0.07, TY + 0.1), 0.4, 0.1);
+        await this.itemTo(hand, m, P.seat.at(0.64, -0.14 - (n - 1) * 0.07, TY + 0.02), null, 0.4, 0.1);
         sfx('clang');
+        this.shake(0.01);
         await vanish();
         keep = true;
         vs.players[e.player].shield = n;
@@ -1360,9 +1956,16 @@ export class TableView {
         break;
       }
       case 'mirror': {
-        sfx('shimmer');
-        await animate(0.6, (k) => { m.rotation.y = k * Math.PI * 4; });
+        // hold it up at the target and let it flash
         const tg = e.target;
+        const toT = this.headPos(tg).sub(this.front(P, 0.08, 0.4, 1.25)).normalize();
+        await this.itemTo(hand, m, this.front(P, 0.08, 0.45, 1.2), alignQuat(V3(0, 0, 1), V3(0, 1, 0), toT, UP), 0.3, 0.05);
+        sfx('shimmer');
+        const fl = new THREE.PointLight(0xbfefff, 0, 3, 1.5);
+        fl.position.copy(m.getWorldPosition(V3()));
+        this.scene.add(fl);
+        await animate(0.5, (k) => { fl.intensity = Math.sin(k * Math.PI) * 12; m.rotation.y = Math.sin(k * Math.PI * 4) * 0.2; });
+        this.scene.remove(fl);
         this.say(t('c_mirror', { a, b: this.A(tg) }), 2.8);
         await vanish();
         keep = true;
@@ -1385,32 +1988,81 @@ export class TableView {
         break;
       }
       case 'dice': {
-        const dst = V3((Math.random() - 0.5) * 0.4, TY + 0.02, (Math.random() - 0.5) * 0.4);
+        // thrown: two bounces on the felt, tumbling, and they land flat
+        const dst = P.seat.at(0.55 + Math.random() * 0.15, (Math.random() - 0.5) * 0.5, TY); // clear of the gun
+        await animate(0.15, (k) => { hand.position.addScaledVector(P.seat.d, -0.01); M.setCurl(hand, 0.85 * (1 - k)); });
         this.scene.attach(m);
         const p0 = m.position.clone();
+        const mid = p0.clone().lerp(dst, 0.7);
+        mid.y = TY;
         sfx('dice');
-        await animate(0.7, (k) => { m.position.lerpVectors(p0, dst, k); m.position.y += Math.sin(k * Math.PI) * 0.3; m.rotation.set(k * 12, k * 7, k * 5); }, ease.out);
-        this.shake(0.02);
+        await animate(0.45, (k) => {
+          m.position.lerpVectors(p0, mid, k);
+          m.position.y = p0.y + (TY - p0.y) * k + Math.sin(k * Math.PI) * 0.22;
+          m.rotation.set(k * Math.PI * 3, k * 4, k * Math.PI * 2);
+        }, ease.linear);
+        sfx('dice');
+        this.shake(0.01);
+        await animate(0.3, (k) => {
+          m.position.lerpVectors(mid, dst, k);
+          m.position.y = TY + Math.sin(k * Math.PI) * 0.06;
+          m.rotation.set(Math.PI * 3 + k * Math.PI, 4 + k, Math.PI * 2);
+        }, ease.out);
+        sfx('dice');
         this.say(t('c_dice', { a }), 2.6);
         await animate(0.4, (k) => { this.gun.userData.body.rotation.z = Math.sin(k * 30) * 0.1 * (1 - k); });
         await wait(0.6);
         break;
       }
       case 'glove': case 'goldglove': {
+        // two hands: one holds the glove open by the cuff, the other slides into it
+        const gold = e.id === 'goldglove';
         const tg = e.target;
         const stolenM = this.itemMeshes.get(e.stolen.uid);
-        await vanish();
+        const F = this.front(P, -0.05, 0.28, 1.3);
+        this.camFocus(F, me ? 0.3 : 0.2);
+        await this.itemTo(hand, m, F, inward, 0.35, 0.05);
+        const cuff = this.mdl(m).localToWorld(u.cuff.clone());
+        const fromSide = quatFromEuler(0, Math.atan2(P.seat.r.x, P.seat.r.z), 0);
+        await this.handTo(L, cuff.clone().addScaledVector(P.seat.r, -0.1).add(V3(0, 0.02, 0)), 0.32, 0.08, fromSide);
+        await this.curl(L, 0.7, 0.1);
+        L.attach(m);
+        await this.curl(hand, 0, 0.08);
+        const fwd = V3(0, 0, 1).applyQuaternion(inward);
+        const wear = m.getWorldPosition(V3());
+        await this.handTo(hand, wear.clone().addScaledVector(fwd, -0.3).add(V3(0, 0.03, 0)), 0.28, 0.1, inward);
+        this.say(t('c_glovesOn', { a }), 1.6);
+        sfx('cloth');
+        const s0 = m.scale.x;
+        await Promise.all([
+          moveTo(hand, wear, 0.35, { e: ease.out }),
+          animate(0.35, (k) => m.scale.setScalar(s0 * (1 + 0.35 * k))),
+        ]);
+        // a tug, and it's on
+        await moveTo(L, L.position.clone().addScaledVector(fwd, -0.05), 0.1);
+        sfx('cloth');
+        M.setHandMaterial(hand, M.gloveMaterial(gold));
+        m.parent && m.parent.remove(m);
         keep = true;
+        this.puff(wear.clone().add(V3(0, 0.04, 0)), gold ? 0xffd860 : 0x8a6a4a, 1);
+        if (gold) this.sparks(wear.clone().add(V3(0, 0.05, 0)), 6, 0xffe080);
+        await animate(0.2, (k) => M.setCurl(hand, Math.sin(k * Math.PI) * 0.6)); // flex the fingers
+        this.curl(L, 0, 0.08);
+        this.handHome(P, 0, 0.35);
         vs.players[tg].slots[e.from] = null;
         vs.players[e.player].slots[e.to] = { ...e.stolen };
         this.say(t('c_steal', { a, b: this.A(tg), item: itemName(e.stolen.id) }), 2.6);
         if (stolenM) {
+          this.unglitch(stolenM);
           stolenM.userData.owner = e.player;
           stolenM.userData.slot = e.to;
-          await this.curl(hand, 0, 0.1);
           await this.carryToSlot(P, stolenM, e.player, e.to, 1);
         }
-        await wait(0.3);
+        await wait(0.25);
+        // its work done, the glove dissolves
+        this.puff(hand.position.clone().add(V3(0, 0.05, 0)), gold ? 0xffd860 : 0x8a6a4a, 1.2);
+        M.setHandMaterial(hand, null);
+        await wait(0.2);
         break;
       }
       case 'trash': {
@@ -1418,6 +2070,7 @@ export class TableView {
         const victimM = this.itemMeshes.get(e.removed.uid);
         this.itemMeshes.delete(e.removed.uid);
         vs.players[tg].slots[e.from] = null;
+        if (victimM) this.unglitch(victimM);
         this.scene.attach(m);
         const dst = victimM ? victimM.position.clone().add(V3(0, 0.02, 0)) : this.slotPos(tg, e.from);
         await moveTo(m, dst, 0.6, { arc: 0.35 });
@@ -1432,62 +2085,122 @@ export class TableView {
         break;
       }
       case 'stinktrash': {
-        this.scene.attach(m);
-        await moveTo(m, V3(0.15, TY + 0.02, 0.2), 0.5, { arc: 0.3 });
+        // set it in the middle and pop the lid: everything it picks starts to rot
+        const spot = P.seat.at(0.62, 0.3, TY); // free table between the owner and the gun
+        await this.itemTo(hand, m, spot, null, 0.5, 0.25);
+        await this.drop(hand, m);
+        this.handHome(P, 1, 0.35);
+        const lid = u.lid;
         sfx('stink');
-        for (let k = 0; k < 4; k++) this.puff(m.position.clone().add(V3((Math.random() - 0.5) * 0.2, 0.15, (Math.random() - 0.5) * 0.2)), 0x7aa030, 2);
-        await wait(0.5);
-        for (const r of e.removed) {
+        if (lid) {
+          const l0 = lid.position.clone(), r0 = lid.rotation.z;
+          animate(0.5, (k) => { lid.position.set(l0.x + k * 0.05, l0.y + Math.sin(k * Math.PI) * 0.12 + k * 0.01, l0.z); lid.rotation.z = r0 + k * 2.4; }, ease.out);
+        }
+        for (let k = 0; k < 6; k++) this.puff(m.position.clone().add(V3((Math.random() - 0.5) * 0.25, 0.12 + Math.random() * 0.1, (Math.random() - 0.5) * 0.25)), 0x7aa030, 2.2);
+        await wait(0.4);
+        const rots = [];
+        e.removed.forEach((r, k) => {
           vs.players[r.player].slots[r.slot] = null;
           const im = this.itemMeshes.get(r.uid);
           this.itemMeshes.delete(r.uid);
-          if (!im) continue;
-          this.puff(im.position.clone().add(V3(0, 0.05, 0)), 0x7aa030, 1.4);
-          scaleTo(im, 0.01, 0.6).then(() => im.parent && im.parent.remove(im));
-        }
+          if (!im) return;
+          this.unglitch(im);
+          rots.push(this.rot(im, k * 0.12));
+        });
         this.say(t('c_stink', { a, k: e.removed.length }), 2.8);
-        await wait(1.0);
+        await Promise.all(rots);
+        await wait(0.2);
         break;
       }
       case 'fake': {
-        await this.handTo(hand, gunTop(), 0.4, 0.1);
+        // push the dummy shell into the gun's port
+        const port = g.localToWorld(g.userData.port.clone());
+        const shell = u.shell;
+        const sp = () => shell.getWorldPosition(V3());
+        await this.itemTo(hand, m, m.getWorldPosition(V3()).add(port).sub(sp()).add(V3(0, 0.07, 0)), null, 0.4, 0.1);
+        await this.itemTo(hand, m, m.getWorldPosition(V3()).add(port).sub(sp()).add(V3(0, 0.012, 0)), null, 0.15, 0);
         sfx('shellIn');
+        const s0 = shell.scale.x;
+        await animate(0.18, (k) => shell.scale.setScalar(s0 * (1 - k * 0.98)), ease.in);
+        shell.visible = false;
+        this.shake(0.01);
         vs.shellsLeft = e.shellsLeft;
         this.say(t('c_fake', { a }), 2.6);
-        await wait(0.9);
+        await wait(0.7);
         break;
       }
       case 'switch': {
-        await this.handTo(hand, gunTop(), 0.4, 0.1);
+        // set it down, flick the lever across
+        const spot = P.seat.at(1.18, 0.12, TY);
+        await this.itemTo(hand, m, spot, inward, 0.35, 0.06);
+        await this.drop(hand, m);
+        const lever = u.lever;
+        const knob = () => lever.localToWorld(V3(0, 0.06, 0));
+        await this.handTo(hand, knob().addScaledVector(P.seat.d, 0.11).add(V3(0, 0.02, 0)), 0.2, 0.04, inward);
+        await this.curl(hand, 0.3, 0.06);
+        const off = hand.position.clone().sub(knob());
+        const r0 = lever.rotation.x;
+        await animate(0.18, (k) => { lever.rotation.x = r0 - 1.0 * k; hand.position.copy(knob()).add(off); }, ease.in);
+        sfx('lock');
         sfx('zap');
         this.shake(0.03);
         this.gun.userData.light.color.setHex(0x66aaff);
         this.gun.userData.light.intensity = 8;
+        this.sparks(this.gun.position.clone().add(V3(0, 0.08, 0)), 6, 0x88ccff);
         await wait(0.25);
         this.gun.userData.light.intensity = 0;
         this.gun.userData.light.color.setHex(0xffb060);
         this.say(t('c_switch', { a }), 3.2);
-        await wait(1.0);
+        await wait(0.9);
         break;
       }
       case 'syringe': {
-        sfx('needle');
-        await animate(0.5, (k) => { m.rotation.z = Math.sin(k * 20) * 0.2; });
+        // into the wrist; then the lights go out for a bit
+        const lp = this.inspectPos(P, -0.08, 0.2);
+        if (!me) this.camFocus(lp, 0.2);
+        await this.handTo(L, lp, 0.35, 0.08, quatFromEuler(0, P.seat.faceIn + 0.6, 0));
+        L.updateMatrixWorld(true);
+        const wrist = L.localToWorld(V3(0, 0.055, -0.09));
+        await this.inject(hand, u.syr, wrist, wrist.clone().add(V3(0, 0.12, 0)).addScaledVector(P.seat.r, 0.14));
+        this.handHome(P, 0, 0.35);
+        await vanish();
+        keep = true;
+        if (me) {
+          // pulses of black, then out cold for two seconds
+          sfx('heartbeat');
+          for (const [op, d] of [[0.55, 0.22], [0.12, 0.25], [0.75, 0.2], [0.3, 0.22], [1, 0.3]]) {
+            this.ui.veil && this.ui.veil(op, d);
+            await wait(d);
+            if (op > 0.5) sfx('heartbeat');
+          }
+          this.handHome(P, 1, 0.01);
+          await wait(2.0);
+        } else {
+          this.handHome(P, 1, 0.35);
+          await this.slump(e.player, 1.6);
+        }
+        // coming back: hearts if it worked, a cracked one if it didn't
         if (e.good) {
-          sfx('heal');
           vs.players[e.player].hp = e.hp;
           P.candles.forEach((c, k) => this.lightCandle(c, k < e.hp));
-          this.say(t('c_syrGood', { a, k: e.amount }), 2.6);
-        } else this.say(t('c_syrBad'), 1.6);
-        await wait(0.8);
+        }
+        if (me) { this.ui.veil && this.ui.veil(0, 0.45); this.ui.contrast && this.ui.contrast(1.5); }
+        this.hearts(this.aboveHead(e.player), !e.good, e.good ? 6 : 1, e.good ? 0.2 : 0);
+        sfx(e.good ? 'heal' : 'bad');
+        this.hud();
+        if (e.good) this.say(t('c_syrGood', { a, k: e.amount }), 2.6);
+        else this.say(t('c_syrBad'), 1.6);
+        await wait(0.9);
         break;
       }
       case 'cuffs': {
         // the cuffs fly over, swell up, and snap shut around both wrists
         const tg = e.target;
         const tP = this.P[tg];
+        await animate(0.12, (k) => M.setCurl(hand, 0.85 * (1 - k)));
         this.scene.attach(m);
         const mid = tP.hands[0].position.clone().add(tP.hands[1].position).multiplyScalar(0.5).add(V3(0, 0.12, 0));
+        sfx('chain');
         await moveTo(m, mid, 0.55, { arc: 0.4 });
         await scaleTo(m, ITEM_SCALE * 2.6, 0.25, ease.out);
         sfx('chain');
@@ -1502,26 +2215,38 @@ export class TableView {
         break;
       }
       case 'hack': {
+        // aim the device, thumb the button: a signal crawls over and their stuff starts glitching
         const tg = e.target;
         const tP = this.P[tg];
-        this.scene.attach(m);
-        await moveTo(m, tP.seat.at(1.1, 0, TY + 0.25), 0.55, { arc: 0.3 });
+        const goal = tP.seat.at(1.15, 0, TY + 0.05);
+        const from = this.front(P, 0.08, 0.38, 1.3);
+        const dir = goal.clone().sub(from).normalize();
+        await this.itemTo(hand, m, from, alignQuat(V3(0, 0, 1), V3(0, 1, 0), dir, UP), 0.3, 0.04);
+        await animate(0.12, (k) => M.setCurl(hand, 0.85 + Math.sin(k * Math.PI) * 0.3));
         sfx('hack');
-        for (const im of this.itemMeshes.values()) {
-          if (im.userData.owner !== tg) continue;
-          const y0 = im.position.y;
-          animate(0.6, (k) => { im.position.y = y0 + Math.sin(k * Math.PI * 6) * 0.02; });
-        }
-        await wait(0.6);
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), basic(0x39ff6a, { transparent: true, opacity: 0.7, depthWrite: false, blending: THREE.AdditiveBlending }));
+        this.scene.add(beam);
+        const src = m.getWorldPosition(V3()).add(V3(0, 0.05, 0));
+        await animate(0.7, (k) => {
+          const end = src.clone().lerp(goal, Math.min(1, k * 1.6));
+          beam.position.copy(src).add(end).multiplyScalar(0.5);
+          beam.lookAt(end);
+          beam.scale.set(0.006 + Math.random() * 0.01, 0.006, Math.max(0.001, src.distanceTo(end)));
+          beam.visible = Math.random() > 0.2;
+        }, ease.linear);
+        this.scene.remove(beam);
+        beam.geometry.dispose();
+        beam.material.dispose();
+        sfx('glitch');
         vs.players[tg].hacked = true;
         this.setStatus(tg, 'hacked', true);
         this.say(t('c_hack', { a, b: this.A(tg) }), 2.8);
-        await wait(0.6);
+        await wait(0.9);
         break;
       }
       case 'rotator': {
         this.scene.attach(m);
-        await moveTo(m, V3(0.25, TY + 0.02, 0.25), 0.4, { arc: 0.15 });
+        await moveTo(m, P.seat.at(0.62, -0.25, TY + 0.02), 0.4, { arc: 0.15 });
         sfx('whoosh');
         await animate(0.9, (k) => { m.rotation.y = k * Math.PI * 4 * (e.dir > 0 ? 1 : -1); });
         vs.dir = e.dir;
@@ -1530,12 +2255,33 @@ export class TableView {
         break;
       }
       case 'phone': {
-        await this.handTo(hand, e.player === this.viewer ? this.camPos.clone().lerp(V3(0, TY, 0), 0.25).add(V3(0.2, -0.1, 0)) : this.headPos(e.player).lerp(V3(0, TY, 0), 0.2), 0.4, 0.05);
+        // to the ear (or, for you, right up in front of your eyes); the screen shows the answer
+        const set = u.setScreen || (() => {});
+        let pos, front;
+        if (me) {
+          const c = this.camHome();
+          const fwd = c.look.clone().sub(c.pos).normalize();
+          const right = fwd.clone().cross(UP).normalize();
+          pos = c.pos.clone().addScaledVector(fwd, 0.8).addScaledVector(right, 0.06).add(V3(0, -0.1, 0));
+          front = c.pos.clone().sub(pos).normalize();
+        } else {
+          pos = this.headPos(e.player).addScaledVector(P.seat.r, 0.24).addScaledVector(P.seat.d, -0.05).add(V3(0, -0.04, 0));
+          front = P.seat.r.clone().negate();
+        }
+        // held from behind, so the hand never covers the screen
+        const up = UP.clone().addScaledVector(front, -front.y).normalize();
+        await this.holdFromBack(hand, m, pos, alignQuat(u.screenNormal, u.screenUp, front, up), front, up, 0.45);
         sfx('phone');
-        await wait(1.0);
-        if (e.secret) this.say(t('c_phoneSecret', e.secret), 3.6);
-        else this.say(t('c_phoneOther', { a }), 2.6);
-        await wait(1.2);
+        for (let i = 0; i < 4; i++) { set(i % 2 ? '#7ab04a' : '#c8f0a0', i % 2 ? '' : '...'); await wait(0.22); }
+        if (e.secret) {
+          set(e.secret.live ? '#c81e28' : '#8a8a8a', e.secret.pos, e.secret.live ? '#fff' : '#111');
+          sfx('blip');
+          this.say(t('c_phoneSecret', e.secret), 3.6);
+        } else {
+          set('#7ab04a', '?');
+          this.say(t('c_phoneOther', { a }), 2.6);
+        }
+        await wait(1.6);
         break;
       }
       case 'wings': {
@@ -1561,7 +2307,7 @@ export class TableView {
         break;
       }
       case 'handheld': {
-        await this.handTo(hand, toFace(), 0.45, 0.05);
+        await this.itemTo(hand, m, toFace(), null, 0.45, 0.05);
         await animate(0.4, (k) => { m.scale.setScalar(ITEM_SCALE * (1 + k * 0.6)); });
         sfx('boot');
         this.say(t('c_handheld', { a, game: gameName(e.game) }), 3);
@@ -1571,7 +2317,7 @@ export class TableView {
     }
     if (!keep) await vanish();
     this.hud();
-    await this.handHome(P, 1, 0.35);
+    await Promise.all([this.handHome(P, 1, 0.35), this.camMode === 'seat' ? this.goHome(0.45) : null]);
   }
 
   // ---------------- picking ----------------

@@ -260,6 +260,30 @@ const S = {
     const t = now();
     tone(t, 0.12, { type: 'sine', f0: 300, f1: 900, gain: 0.15 });
   },
+  squish() { // rubbery squeeze, like a toy being wrung
+    const t = now();
+    tone(t, 0.32, { type: 'sawtooth', f0: 520, f1: 1300, gain: 0.05, attack: 0.04 });
+    tone(t, 0.32, { type: 'sine', f0: 260, f1: 640, gain: 0.12, attack: 0.04 });
+    noise(t, 0.22, { type: 'bandpass', f0: 900, f1: 1800, q: 6, gain: 0.18, attack: 0.05 });
+  },
+  crack() { // metal snapping off
+    const t = now();
+    noise(t, 0.06, { type: 'highpass', f0: 2500, gain: 0.6 });
+    tone(t, 0.09, { type: 'square', f0: 900, f1: 220, gain: 0.14 });
+    [1760, 2637].forEach((f) => tone(t + 0.02, 0.35, { type: 'triangle', f0: f, f1: f * 0.97, gain: 0.05 }));
+  },
+  cloth() { // fabric pulled tight
+    const t = now();
+    noise(t, 0.16, { type: 'bandpass', f0: 3200, f1: 1800, q: 1.4, gain: 0.22, attack: 0.03 });
+  },
+  buzz() { // flies around something rotten
+    const t = now();
+    for (let i = 0; i < 3; i++) tone(t + i * 0.09, 0.5, { type: 'sawtooth', f0: 180 + Math.random() * 60, f1: 210 + Math.random() * 60, gain: 0.025, attack: 0.08 });
+  },
+  glitch() {
+    const t = now();
+    for (let i = 0; i < 5; i++) tone(t + i * 0.03, 0.03, { type: 'square', f0: 120 + Math.random() * 3000, gain: 0.03 });
+  },
 };
 
 export function sfx(name) {

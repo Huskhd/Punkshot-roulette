@@ -28,7 +28,7 @@ order nobody knows. On your turn use any items you like, then point the gun at y
 
 | Mode | How it works |
 | --- | --- |
-| Progressive | Round 1 has no items, round 2 gives 2 each, round 3 gives 3 each… (max 6 per round). |
+| Progressive | Round 1 has no items, round 2 gives 2 each, round 3 gives 3 each… (max 5 per round). |
 | Draft | Same amounts, but everyone takes turns picking from one shared tray. |
 | Shop | Surviving a round earns chips (3 + damage you dealt). Spend them in the shop each round. |
 | No items | Pure nerve. |
@@ -38,7 +38,11 @@ Everyone holds at most **6 items**. Anything that doesn't fit is lost. In Draft,
 ### Items
 
 Items come in four rarities: common, **rare** (blue glow), **epic** (purple glow) and **legendary** (gold glow).
-Rarer items show up less often and cost more in the shop (rare 4, epic 5, legendary 6 chips).
+Rarer items show up less often and cost more in the shop (rare 4, epic 5, legendary 6 chips). The longer the game
+goes, the more often the rare ones turn up: by round 8 each tier shows up about as often as the tier below it used to
+(legendary like epic, epic like rare, rare nearly like common, but still a bit rarer than the average common item).
+
+**The game speeds up every round** (+0.15x per round, on top of the speed setting, never past x3 in total).
 
 | Item | Effect |
 | --- | --- |
@@ -56,7 +60,7 @@ Rarer items show up less often and cost more in the shop (rare 4, epic 5, legend
 | Trash Can | Throw away one item of your choice from another player. |
 | Smelly Trash Can *(rare)* | 25% of all items on the table rot away — yours too, but yours are 25% less likely to. |
 | Fake Shell | Slip an extra blank into the gun at a random spot. |
-| Life Insurance *(legendary)* | Sign it, and the next time you die you come back with 1 HP. Lasts until it pays out. |
+| Life Insurance *(legendary)* | Sign it, and the next time you die you come back with 1 HP. Covers 3 rounds (one round = one magazine, the current one included), or until it pays out. |
 | Angel Wings *(legendary)* | Bring a dead player back with half their HP — or keep them: if you die holding them, you come back. |
 | Double Barrel | Upgrades the gun with a second barrel: your next shot fires the next two shells at once. |
 | Switch | Every live shell left becomes blank and every blank becomes live. |
@@ -65,7 +69,7 @@ Rarer items show up less often and cost more in the shop (rare 4, epic 5, legend
 | Hacking Device *(rare)* | Pick a player — they can't use items on their next turn. |
 | Rotator | Reverse the turn order. |
 | Phone | A voice tells you one random shell left in the gun and its position (only you hear it). |
-| Pocket Duo *(epic)* | Everyone plays a minigame you choose. The bottom half of the scores loses 2 HP. |
+| Pocket Duo *(epic)* | Everyone plays a minigame you choose. The bottom half of the scores loses 2 HP. If you come first, you heal 2 HP (not on your last life). |
 
 Whoever is due to shoot next picks items first (Draft and Shop), so a blank on the last shell, aimed at yourself, buys
 you first pick.

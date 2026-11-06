@@ -1,6 +1,6 @@
 // Plays thousands of bot-vs-bot games through the real rules engine and checks
 // invariants. Run: npm test
-import { Game, MAX_SLOTS, MINIGAME_IDS, MINIGAME_DMG, ITEMS, itemProblem, redactEvents, mulberry32 } from '../js/engine.js';
+import { Game, MAX_SLOTS, MINIGAME_IDS, MINIGAME_DMG, MINIGAME_HEAL, INSURANCE_ROUNDS, MAX_PER_ROUND, ITEMS, itemProblem, itemsForRound, itemWeight, roundSpeed, MAX_SPEED, redactEvents, mulberry32 } from '../js/engine.js';
 import { botAction } from '../js/bot.js';
 
 let failures = 0;
@@ -133,6 +133,49 @@ for (const mode of ['progressive', 'shop']) {
   const r = h.act(q, { type: 'scores', scores: sc });
   const mg = r.events.find((e) => e.t === 'mgResult');
   assert(mg && mg.losers[0] === 1 - q && mg.dmg === MINIGAME_DMG && h.players[1 - q].hp === 4 - MINIGAME_DMG, 'minigame losers lose 2 HP');
+  // ...and the owner heals 2 if they came first (capped at max HP)
+  assert(mg.first && mg.first.player === q && h.players[q].hp === 4, 'first place at full HP heals nothing');
+  const h2 = new Game({ players: [{ name: 'a' }, { name: 'b' }, { name: 'c' }], hp: 5, itemMode: 'none', seed: 11 });
+  h2.start();
+  const q2 = h2.decision.player;
+  h2.players[q2].hp = 2;
+  h2.players[q2].slots[0] = { uid: 997, id: 'handheld' };
+  h2.act(q2, { type: 'item', slot: 0, pick: 'draw' });
+  const sc2 = [5, 5, 5];
+  sc2[q2] = 99;
+  const mg2 = h2.act(q2, { type: 'scores', scores: sc2 }).events.find((e) => e.t === 'mgResult');
+  assert(mg2.first && mg2.first.amount === MINIGAME_HEAL && h2.players[q2].hp === 2 + MINIGAME_HEAL, 'Pocket Duo owner heals 2 when first');
+  // not first: no heal
+  const h3 = new Game({ players: [{ name: 'a' }, { name: 'b' }], hp: 5, itemMode: 'none', seed: 12 });
+  h3.start();
+  const q3 = h3.decision.player;
+  h3.players[q3].hp = 4;
+  h3.players[q3].slots[0] = { uid: 996, id: 'handheld' };
+  h3.act(q3, { type: 'item', slot: 0, pick: 'draw' });
+  const sc3 = [];
+  sc3[q3] = 1; sc3[1 - q3] = 80;
+  const mg3 = h3.act(q3, { type: 'scores', scores: sc3 }).events.find((e) => e.t === 'mgResult');
+  assert(!mg3.first && h3.players[q3].hp === 4 - MINIGAME_DMG, 'no heal when not first');
+  // Life Insurance covers 3 rounds (the current one included), then expires
+  const li = new Game({ players: [{ name: 'a' }, { name: 'b' }], hp: 4, itemMode: 'none', seed: 13 });
+  li.start();
+  const p4 = li.decision.player;
+  li.players[p4].slots[0] = { uid: 995, id: 'insurance' };
+  li.act(p4, { type: 'item', slot: 0 });
+  assert(li.players[p4].insured === INSURANCE_ROUNDS, 'insurance starts at 3 rounds');
+  let ends = 0;
+  for (let k = 0; k < INSURANCE_ROUNDS; k++) {
+    assert(li.players[p4].insured > 0, `insured during round ${k + 1}`);
+    li.decision = { kind: 'turn', player: li.turn };
+    ends += li.adminReload().filter((e) => e.t === 'insuranceEnd').length;
+  }
+  assert(li.players[p4].insured === 0 && ends === 1, 'insurance expires after 3 rounds');
+  // items per round cap at 5; rarer items get more common later on
+  assert(MAX_PER_ROUND === 5 && itemsForRound(2) === 2 && itemsForRound(5) === 5 && itemsForRound(9) === 5, 'items per round cap at 5');
+  for (const id of ['hack', 'medkit', 'wings']) assert(itemWeight(id, 20) > itemWeight(id, 2), `${id} gets more common`);
+  assert(itemWeight('wings', 20) === 2 && itemWeight('medkit', 20) === 3 && itemWeight('hack', 20) === 4, 'one stage down');
+  assert(itemWeight('stethoscope', 20) === ITEMS.stethoscope.weight, 'common weights stay');
+  assert(roundSpeed(1) === 1 && roundSpeed(5) > roundSpeed(2) && MAX_SPEED === 3, 'round speed grows');
 }
 const itemUse = Object.keys(allCounts).sort().map((k) => `${k}:${allCounts[k]}`).join(' ');
 console.log('event counts:', itemUse);

@@ -310,6 +310,21 @@ export function makeHand(side = 1) {
   g.scale.setScalar(1.25);
   return g;
 }
+// Pulling on a glove: the hand's own boxes take the glove's material (null = bare hand again).
+export function setHandMaterial(hand, mat) {
+  hand.userData.inner.traverse((o) => {
+    if (!o.isMesh || o.material === OUTLINE) return;
+    if (!o.userData.bare) o.userData.bare = o.material;
+    o.material = mat || o.userData.bare;
+  });
+  hand.userData.gloved = !!mat;
+}
+const GLOVE_MATS = {};
+export function gloveMaterial(gold) {
+  const k = gold ? 'gold' : 'plain';
+  if (!GLOVE_MATS[k]) GLOVE_MATS[k] = gold ? lam(0xd8b040, { emissive: 0x8a6a10, emissiveIntensity: 0.45 }) : lam(0x6a4a2e, { emissive: 0x1a1008 });
+  return GLOVE_MATS[k];
+}
 export function setCurl(hand, k) {
   const u = hand.userData;
   u.curl = k;
@@ -481,6 +496,74 @@ export function makeCuffRing() {
   return m;
 }
 
+// One link of the handcuff chain: an oval ring, long axis along +y.
+let LINK_GEO = null;
+export function makeChainLink(mat) {
+  if (!LINK_GEO) LINK_GEO = new THREE.TorusGeometry(0.011, 0.0032, 4, 8).scale(1, 1.55, 1);
+  const m = new THREE.Mesh(LINK_GEO, mat);
+  m.castShadow = true;
+  return m;
+}
+
+// Pixel heart sprite (broken = cracked and dark) for the drug syringe's effect.
+const HEART_TEX = {};
+export function makeHeart(broken) {
+  const k = broken ? 'b' : 'h';
+  if (!HEART_TEX[k]) {
+    const rows = ['.XX.XX.', 'XXXXXXX', 'XXXXXXX', '.XXXXX.', '..XXX..', '...X...'];
+    HEART_TEX[k] = canvasTex(9, 8, (g) => {
+      rows.forEach((r, y) => [...r].forEach((c, x) => {
+        if (c !== 'X') return;
+        g.fillStyle = broken ? '#5a1418' : (y < 2 && x > 0 && x < 3 ? '#ff9aa4' : '#e8243a');
+        g.fillRect(x + 1, y + 1, 1, 1);
+      }));
+      if (broken) { g.fillStyle = '#000'; [[4, 1], [4, 2], [3, 3], [4, 4], [4, 5]].forEach(([x, y]) => g.fillRect(x, y + 1, 1, 1)); }
+    });
+  }
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: HEART_TEX[k], transparent: true, depthWrite: false }));
+  sp.scale.set(0.09, 0.08, 1);
+  return sp;
+}
+
+// The bandage wound around a hand: an open sleeve in the hand's own space (around the palm).
+export function makeWrap() {
+  const cloth = lam(0xffffff, {
+    side: THREE.DoubleSide,
+    emissive: 0x5a564c,
+    map: canvasTex(16, 16, (g) => {
+      g.fillStyle = '#eee6d2'; g.fillRect(0, 0, 16, 16);
+      g.fillStyle = '#c9bea4';
+      for (let y = 0; y < 16; y += 4) for (let x = 0; x < 16; x++) g.fillRect(x, (y + (x >> 1)) % 16, 1, 1);
+    }, [2, 1]),
+  });
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 10, 1, true), cloth);
+  m.rotation.x = Math.PI / 2; // sleeve runs along the fingers (+z)
+  m.position.set(0, 0.03, -0.03);
+  m.scale.set(0.088, 0.001, 0.036);
+  m.userData.len = 0.13;
+  return m;
+}
+
+// Syringe, needle along +y. userData: plunger (slides +y), liquid (scale.y drains), tip (needle point).
+export function makeSyringe(liquid = 0x7ad02a) {
+  const s = new THREE.Group();
+  s.add(put(cyl(0.015, 0.015, 0.1, 8, lam(0xd8e8e0, { transparent: true, opacity: 0.55 })), 0, 0, 0));
+  const liq = cyl(0.012, 0.012, 0.07, 8, basic(liquid));
+  liq.geometry.translate(0, -0.035, 0); // drains from the bottom up toward the needle
+  liq.position.y = 0.045;
+  s.add(liq);
+  s.add(put(cyl(0.003, 0.002, 0.05, 4, lam(0xa8aeb4)), 0, 0.075, 0)); // needle
+  s.add(put(cyl(0.007, 0.004, 0.008, 6, lam(0xa8aeb4)), 0, 0.052, 0)); // hub
+  s.add(put(box(0.05, 0.006, 0.012, lam(0x333333)), 0, -0.045, 0)); // finger flange
+  const plunger = new THREE.Group();
+  plunger.add(put(cyl(0.013, 0.013, 0.008, 8, lam(0x222222)), 0, -0.022, 0)); // rubber stopper
+  plunger.add(put(cyl(0.005, 0.005, 0.05, 4, lam(0xa8aeb4)), 0, -0.05, 0));
+  plunger.add(put(cyl(0.02, 0.02, 0.006, 8, lam(0x333333)), 0, -0.078, 0)); // thumb pad
+  s.add(plunger);
+  s.userData = { plunger, liquid: liq, tip: V(0, 0.1, 0), grip: V(0, -0.04, 0) };
+  return s;
+}
+
 export function makeLabel(text, { color = '#f4f0e6', bg = 'rgba(0,0,0,0.75)', w = 64, h = 24, scale = 0.16 } = {}) {
   const tex = canvasTex(w, h, (g) => {
     g.fillStyle = bg;
@@ -550,6 +633,8 @@ export function makeItem(id, { glow = true } = {}) {
         g.add(put(sph(0.011, 6, 5, black), tx, 0.009, tz)); // ear tip
       }
       g.add(put(box(0.005, 0.005, 0.07, chrome), -0.05, 0.008, 0)); // tension spring
+      g.userData.grip = V(0.06, 0.015, 0);
+      g.userData.chest = V(0.072, 0.0, 0);
       break;
     }
     case 'prybar': {
@@ -557,6 +642,8 @@ export function makeItem(id, { glow = true } = {}) {
       g.add(put(box(0.22, 0.018, 0.022, red), 0, 0.011, 0));
       g.add(put(box(0.06, 0.018, 0.022, red), 0.12, 0.02, 0.02, 0, 0.9, 0.4));
       g.add(put(box(0.03, 0.012, 0.024, chrome), -0.115, 0.01, 0));
+      g.userData.grip = V(-0.06, 0.02, 0);
+      g.userData.claw = V(0.145, 0.03, 0.035);
       break;
     }
     case 'saw': {
@@ -569,6 +656,7 @@ export function makeItem(id, { glow = true } = {}) {
       for (let k = 0; k < 10; k++) g.add(put(cone(0.005, 0.01, 3, steel), -0.055 + k * 0.016, 0.004, -0.029, -Math.PI / 2, 0, 0));
       g.add(put(box(0.05, 0.022, 0.06, wood), -0.085, 0.011, 0.004)); // handle
       g.add(put(box(0.03, 0.024, 0.026, lam(0x1a1208)), -0.085, 0.012, 0.004)); // grip hole
+      g.userData.grip = V(-0.09, 0.022, 0.004);
       break;
     }
     case 'bandage': {
@@ -601,19 +689,27 @@ export function makeItem(id, { glow = true } = {}) {
     }
     case 'doll': {
       const burlap = lam(0xffffff, { map: noiseTex(0x9a7a4a, { amt: 0.4, w: 8, h: 8, seed: 31 }) });
-      g.add(put(box(0.05, 0.06, 0.03, burlap), 0, 0.045, 0));
-      g.add(put(sph(0.032, 6, 5, burlap), 0, 0.1, 0));
-      g.add(put(box(0.07, 0.016, 0.016, burlap), 0, 0.06, 0, 0, 0, 0.2));
-      g.add(put(box(0.018, 0.035, 0.018, burlap), -0.014, 0.008, 0));
-      g.add(put(box(0.018, 0.035, 0.018, burlap), 0.014, 0.008, 0));
+      // body and head are separate groups so the doll can be squished (body) and swell (head)
+      const body = new THREE.Group();
+      body.add(put(box(0.05, 0.06, 0.03, burlap), 0, 0.045, 0));
+      body.add(put(box(0.07, 0.016, 0.016, burlap), 0, 0.06, 0, 0, 0, 0.2));
+      body.add(put(box(0.018, 0.035, 0.018, burlap), -0.014, 0.008, 0));
+      body.add(put(box(0.018, 0.035, 0.018, burlap), 0.014, 0.008, 0));
+      body.add(put(cyl(0.0025, 0.0025, 0.05, 4, chrome), 0.02, 0.07, 0.015, 0.6, 0, -0.8));
+      body.add(put(sph(0.007, 5, 4, lam(0xcc1111)), 0.02 + Math.sin(0.8) * 0.025, 0.09, 0.03));
+      const head = new THREE.Group(); // pivots at the neck
+      head.position.y = 0.075;
+      head.add(put(sph(0.032, 6, 5, burlap), 0, 0.025, 0));
       for (const s of [-1, 1]) {
-        g.add(put(box(0.012, 0.003, 0.003, black), s * 0.012, 0.105, 0.031, 0, 0, 0.8));
-        g.add(put(box(0.012, 0.003, 0.003, black), s * 0.012, 0.105, 0.031, 0, 0, -0.8));
+        head.add(put(box(0.012, 0.003, 0.003, black), s * 0.012, 0.03, 0.031, 0, 0, 0.8));
+        head.add(put(box(0.012, 0.003, 0.003, black), s * 0.012, 0.03, 0.031, 0, 0, -0.8));
       }
-      for (const [x, y, rz] of [[0.02, 0.07, -0.8], [-0.01, 0.11, 0.5]]) {
-        g.add(put(cyl(0.0025, 0.0025, 0.05, 4, chrome), x, y, 0.015, 0.6, 0, rz));
-        g.add(put(sph(0.007, 5, 4, lam(0xcc1111)), x + Math.sin(-rz) * 0.025, y + 0.02, 0.03));
-      }
+      head.add(put(cyl(0.0025, 0.0025, 0.05, 4, chrome), -0.01, 0.035, 0.015, 0.6, 0, 0.5));
+      head.add(put(sph(0.007, 5, 4, lam(0xcc1111)), -0.01 + Math.sin(-0.5) * 0.025, 0.055, 0.03));
+      g.add(body, head);
+      g.userData.body = body;
+      g.userData.head = head;
+      g.userData.grip = V(0, 0.06, 0);
       break;
     }
     case 'mirror': {
@@ -640,8 +736,8 @@ export function makeItem(id, { glow = true } = {}) {
       g.add(d1, d2);
       break;
     }
-    case 'glove': g.add(gloveModel(0x6a4a2e)); break;
-    case 'goldglove': g.add(gloveModel(0xd8b040, 0x8a6a10)); break;
+    case 'glove': g.add(gloveModel(0x6a4a2e)); g.userData.grip = V(0, 0.03, -0.05); g.userData.cuff = V(0, 0.02, -0.06); break;
+    case 'goldglove': g.add(gloveModel(0xd8b040, 0x8a6a10)); g.userData.grip = V(0, 0.03, -0.05); g.userData.cuff = V(0, 0.02, -0.06); break;
     case 'fake': {
       const s = makeShell(false);
       s.children[0].material = lam(0x6f7d62);
@@ -653,6 +749,8 @@ export function makeItem(id, { glow = true } = {}) {
       s2.children[0].material = lam(0x6f7d62);
       s2.position.set(-0.04, 0, 0.02);
       g.add(s2);
+      g.userData.shell = s;
+      g.userData.grip = V(0.035, 0.035, 0);
       break;
     }
     case 'insurance': {
@@ -666,7 +764,10 @@ export function makeItem(id, { glow = true } = {}) {
       });
       g.add(put(box(0.1, 0.004, 0.13, paper), 0, 0.004, 0, 0, 0.15, 0));
       g.add(put(box(0.1, 0.004, 0.13, lam(0xd8d0b8)), 0.008, 0.001, 0.006, 0, 0.25, 0));
-      g.add(put(cyl(0.016, 0.016, 0.008, 8, lam(0xb01818, { emissive: 0x500000 })), 0.025, 0.01, 0.04));
+      const seal = put(cyl(0.016, 0.016, 0.008, 8, lam(0xb01818, { emissive: 0x500000 })), 0.025, 0.01, 0.04);
+      g.add(seal);
+      g.userData.seal = seal;
+      g.userData.grip = V(-0.03, 0.01, -0.04);
       break;
     }
     case 'double': {
@@ -674,26 +775,29 @@ export function makeItem(id, { glow = true } = {}) {
       for (const x of [-0.016, 0.016]) g.add(put(cyl(0.015, 0.015, 0.2, 7, lam(0x2b2d30)), x, 0.016, 0.02, Math.PI / 2, 0, 0));
       g.add(put(box(0.06, 0.03, 0.07, wood), 0, 0.015, -0.1));
       g.add(put(box(0.05, 0.01, 0.01, lam(0x888888)), 0, 0.034, 0.1));
+      g.userData.grip = V(0, 0.03, -0.1);
       break;
     }
     case 'switch': {
       g.add(put(box(0.08, 0.03, 0.06, lam(0x3a3a2a)), 0, 0.015, 0));
       g.add(put(box(0.05, 0.006, 0.04, lam(0xc9b020)), 0, 0.031, 0));
-      g.add(put(cyl(0.005, 0.005, 0.06, 5, chrome), 0, 0.055, 0, 0.5, 0, 0));
-      g.add(put(sph(0.012, 6, 5, lam(0xc02020)), 0, 0.08, 0.015));
+      const lever = new THREE.Group(); // pivots on the box, flips from +x to -x
+      lever.add(put(cyl(0.005, 0.005, 0.06, 5, chrome), 0, 0.03, 0));
+      lever.add(put(sph(0.012, 6, 5, lam(0xc02020)), 0, 0.06, 0));
+      lever.position.y = 0.03;
+      lever.rotation.x = 0.5;
+      g.add(lever);
+      g.userData.lever = lever;
+      g.userData.grip = V(0, 0.09, 0.02);
       break;
     }
     case 'syringe': {
-      const s = new THREE.Group();
-      s.add(put(cyl(0.015, 0.015, 0.1, 8, lam(0xd8e8e0, { transparent: true, opacity: 0.6 })), 0, 0, 0));
-      s.add(put(cyl(0.012, 0.012, 0.07, 8, basic(0x7ad02a)), 0, 0.01, 0));
-      s.add(put(cyl(0.003, 0.002, 0.05, 4, chrome), 0, 0.075, 0));
-      s.add(put(cyl(0.005, 0.005, 0.03, 4, chrome), 0, -0.065, 0));
-      s.add(put(cyl(0.02, 0.02, 0.006, 8, lam(0x333333)), 0, -0.08, 0));
-      s.add(put(box(0.05, 0.006, 0.012, lam(0x333333)), 0, -0.045, 0));
+      const s = makeSyringe(0x7ad02a); // green: the drug (the medkit's is red)
       s.rotation.z = Math.PI / 2;
       s.position.y = 0.02;
       g.add(s);
+      g.userData.syr = s;
+      g.userData.grip = V(0.055, 0.035, 0); // by the plunger end, so the barrel and needle show
       break;
     }
     case 'cuffs': {
@@ -703,7 +807,14 @@ export function makeItem(id, { glow = true } = {}) {
         c.position.set(x, 0.007, 0);
         g.add(c);
       }
-      g.add(put(box(0.02, 0.006, 0.006, lam(0x777777)), 0, 0.007, 0));
+      for (let k = 0; k < 3; k++) {
+        const l = makeChainLink(chrome);
+        l.position.set(-0.012 + k * 0.012, 0.007, 0);
+        l.rotation.set(k % 2 ? Math.PI / 2 : 0, 0, Math.PI / 2);
+        l.scale.setScalar(0.8);
+        g.add(l);
+      }
+      g.userData.grip = V(0, 0.02, 0);
       break;
     }
     case 'rotator': {
@@ -718,21 +829,51 @@ export function makeItem(id, { glow = true } = {}) {
     case 'phone': {
       const p = new THREE.Group();
       p.add(put(box(0.05, 0.12, 0.025, lam(0x2a2c2a)), 0, 0, 0));
-      p.add(put(box(0.036, 0.025, 0.004, basic(0x7ab04a)), 0, 0.03, 0.013));
-      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) p.add(put(box(0.008, 0.006, 0.004, lam(0x999999)), -0.012 + c * 0.012, -0.005 - r * 0.012, 0.013));
+      // the screen: a little canvas so it can turn red/gray and show a number
+      const tex = canvasTex(16, 16, () => {});
+      const scr = put(box(0.04, 0.04, 0.004, [black, black, black, black, basic(0xffffff, { map: tex }), black]), 0, 0.028, 0.012);
+      p.add(scr);
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) p.add(put(box(0.008, 0.005, 0.004, lam(0x999999)), -0.012 + c * 0.012, -0.012 - r * 0.01, 0.013));
       p.add(put(cyl(0.004, 0.004, 0.05, 4, black), 0.015, 0.08, 0));
       p.rotation.x = -1.2;
       p.position.y = 0.02;
       g.add(p);
+      const setScreen = (bg, text, fg = '#111') => {
+        const c = tex.image.getContext('2d');
+        c.fillStyle = bg; c.fillRect(0, 0, 16, 16);
+        if (text) { c.fillStyle = fg; c.font = 'bold 13px monospace'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(text), 8, 9); }
+        tex.needsUpdate = true;
+      };
+      setScreen('#7ab04a', '');
+      Object.assign(g.userData, { setScreen, phone: p, screenNormal: V(0, 0, 1).applyEuler(p.rotation), screenUp: V(0, 1, 0).applyEuler(p.rotation), grip: V(0, 0.03, -0.02) });
       break;
     }
     case 'medkit': {
-      const white = lam(0xece6da, { emissive: 0x302820, emissiveIntensity: 0.4 }), red = lam(0xc01c1c);
-      g.add(put(box(0.12, 0.07, 0.085, white), 0, 0.035, 0));
-      g.add(put(box(0.122, 0.008, 0.087, lam(0x9a9286)), 0, 0.05, 0)); // lid seam
-      g.add(put(box(0.05, 0.006, 0.016, red), 0, 0.072, 0));
-      g.add(put(box(0.016, 0.006, 0.05, red), 0, 0.072, 0));
-      g.add(put(box(0.04, 0.012, 0.01, lam(0x333333)), 0, 0.078, -0.03)); // handle
+      const white = lam(0xece6da, { emissive: 0x302820, emissiveIntensity: 0.4 }), red = lam(0xc01c1c), seam = lam(0x9a9286);
+      const W = 0.12, D = 0.085, H = 0.05, T = 0.006;
+      // hollow base: floor and four walls
+      g.add(put(box(W, T, D, white), 0, T / 2, 0));
+      g.add(put(box(W, H, T, white), 0, H / 2, D / 2 - T / 2));
+      g.add(put(box(W, H, T, white), 0, H / 2, -D / 2 + T / 2));
+      g.add(put(box(T, H, D, white), W / 2 - T / 2, H / 2, 0));
+      g.add(put(box(T, H, D, white), -W / 2 + T / 2, H / 2, 0));
+      g.add(put(box(0.02, 0.012, 0.006, lam(0x555555)), 0, H - 0.008, D / 2 + 0.002)); // latch
+      g.add(put(box(W * 0.8, 0.008, D * 0.75, lam(0xd8d0c0)), 0, T + 0.004, 0)); // padding
+      const inner = makeSyringe(0xd01818); // red: the medkit's own dose
+      inner.rotation.set(0, 0.55, Math.PI / 2); // lies diagonally to fit
+      inner.position.set(0, 0.026, 0.004);
+      inner.scale.setScalar(0.65);
+      g.add(inner);
+      // lid, hinged along the back edge
+      const lid = new THREE.Group();
+      lid.position.set(0, H, -D / 2);
+      lid.add(put(box(W + 0.002, 0.02, D + 0.002, white), 0, 0.01, D / 2));
+      lid.add(put(box(W + 0.004, 0.006, D + 0.004, seam), 0, 0.002, D / 2));
+      lid.add(put(box(0.05, 0.006, 0.016, red), 0, 0.022, D / 2));
+      lid.add(put(box(0.016, 0.006, 0.05, red), 0, 0.022, D / 2));
+      lid.add(put(box(0.04, 0.012, 0.01, lam(0x333333)), 0, 0.028, D / 2 - 0.03)); // handle
+      g.add(lid);
+      Object.assign(g.userData, { lid, syr: inner, grip: V(0, H + 0.03, -0.01), lidFront: V(0, H + 0.02, D / 2) });
       break;
     }
     case 'hack': {
@@ -755,6 +896,8 @@ export function makeItem(id, { glow = true } = {}) {
       lid.position.set(stink ? 0.01 : 0, 0.104, 0);
       if (stink) lid.rotation.z = 0.4;
       g.add(lid);
+      g.userData.lid = lid;
+      g.userData.grip = V(0, 0.09, 0);
       if (stink) {
         g.add(put(box(0.05, 0.004, 0.01, lam(0xd8d0b8)), -0.005, 0.11, 0.015, 0, 0.3, 0.6)); // fish bone
         const fumes = basic(0x9ad040, { transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide });

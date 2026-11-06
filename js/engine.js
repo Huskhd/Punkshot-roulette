@@ -53,6 +53,24 @@ export const ITEM_MODES = ['progressive', 'draft', 'shop', 'none'];
 // Healing items: they stop working on your last life (1 HP).
 export const HEALS = ['bandage', 'medkit', 'syringe'];
 export const MINIGAME_DMG = 2; // what the bottom half loses to the Pocket Duo
+export const MINIGAME_HEAL = 2; // what the Pocket Duo's owner heals if they come first
+export const INSURANCE_ROUNDS = 3; // Life Insurance covers this many rounds (magazines), the current one included
+export const MAX_PER_ROUND = 5; // most items handed out per round
+
+// Rarity drifts down a stage as the game goes on: by DRIFT_ROUNDS rounds after
+// items start, legendary items are as common as epic ones were, epic as rare,
+// and rare almost as common (still a bit rarer than the average common item).
+const DRIFT_TO = { rare: 4, epic: 3, legendary: 2 };
+const DRIFT_ROUNDS = 6;
+export function rarityDrift(round) { return Math.max(0, Math.min(1, (round - 2) / DRIFT_ROUNDS)); }
+export function itemWeight(id, round = 1) {
+  const def = ITEMS[id];
+  const to = DRIFT_TO[def.tier];
+  return to ? def.weight + (to - def.weight) * rarityDrift(round) : def.weight;
+}
+// The game speeds up every round (on top of the player's speed setting), up to x3 in total.
+export const MAX_SPEED = 3;
+export function roundSpeed(round) { return 1 + Math.max(0, (round || 1) - 1) * 0.15; }
 
 export function mulberry32(seed) {
   let a = seed >>> 0;
@@ -124,7 +142,7 @@ export function itemProblem(players, shellsLeft, p, id, target, pick) {
   return null;
 }
 
-export function itemsForRound(round) { return round < 2 ? 0 : Math.min(round, 6); }
+export function itemsForRound(round) { return round < 2 ? 0 : Math.min(round, MAX_PER_ROUND); }
 
 export class Game {
   // opts: { players: [{name, char}], hp, itemMode, seed }
@@ -155,7 +173,7 @@ export class Game {
       idx: i, name: p.name, char: p.char ?? i,
       hp, maxHp: hp, alive: true, shield: 0,
       slots: Array(MAX_SLOTS).fill(null),
-      cuffed: false, doll: false, saw: false, insured: false, double: false, hacked: false, jammed: false, immune: false,
+      cuffed: false, doll: false, saw: false, insured: 0, double: false, hacked: false, jammed: false, immune: false,
       chips: 0, place: 0, roundDmg: 0,
       stats: { shots: 0, selfShots: 0, hits: 0, dmgDealt: 0, dmgTaken: 0, itemsUsed: 0, kills: 0, healed: 0 },
     };
@@ -194,9 +212,10 @@ export class Game {
   rollItem() {
     const twoLeft = this.alive().length <= 2;
     const pool = ITEM_IDS.filter((id) => !(twoLeft && id === 'rotator'));
-    const total = pool.reduce((s, id) => s + ITEMS[id].weight, 0);
+    const w = pool.map((id) => itemWeight(id, this.round));
+    const total = w.reduce((s, x) => s + x, 0);
     let r = this.rng() * total;
-    for (const id of pool) { r -= ITEMS[id].weight; if (r <= 0) return id; }
+    for (let k = 0; k < pool.length; k++) { r -= w[k]; if (r <= 0) return pool[k]; }
     return pool[pool.length - 1];
   }
   newItem(id) { return { uid: this.uidSeq++, id }; }
@@ -415,7 +434,12 @@ export class Game {
 
   endRound() {
     const gains = [];
+    const expired = [];
     this.players.forEach((p) => {
+      if (p.alive && p.insured > 0) {
+        p.insured--;
+        if (p.insured === 0) expired.push(p.idx);
+      }
       if (p.alive && this.cfg.itemMode === 'shop') {
         const g = 3 + p.roundDmg;
         p.chips += g;
@@ -423,6 +447,7 @@ export class Game {
       }
     });
     this.emit({ t: 'roundEnd', round: this.round, gains });
+    expired.forEach((i) => this.emit({ t: 'insuranceEnd', player: i }));
     this.decision = null;
   }
 
@@ -446,7 +471,7 @@ export class Game {
     this.emit({ t: 'damage', player: i, amount, blocked, shield: pl.shield, hp: Math.max(0, pl.hp), by });
     if (pl.hp > 0) return;
     if (pl.insured) {
-      pl.insured = false;
+      pl.insured = 0;
       pl.hp = 1;
       this.emit({ t: 'revive', player: i, hp: 1, via: 'insurance' });
       return;
@@ -462,6 +487,7 @@ export class Game {
     pl.hp = 0;
     pl.alive = false;
     pl.cuffed = pl.doll = pl.hacked = pl.jammed = false;
+    pl.insured = 0;
     const aliveCount = this.alive().length;
     pl.place = aliveCount + 1;
     if (by != null && by !== i) this.players[by].stats.kills++;
@@ -582,7 +608,7 @@ export class Game {
       case 'prybar': { const s = this.shells.shift(); e.shell = s.live; e.shellsLeft = this.shells.length; break; }
       case 'saw': pl.saw = true; break;
       case 'doll': pl.doll = true; break;
-      case 'insurance': pl.insured = true; break;
+      case 'insurance': pl.insured = INSURANCE_ROUNDS; e.rounds = INSURANCE_ROUNDS; break;
       case 'double': pl.double = true; break;
       case 'shield': pl.shield++; e.shield = pl.shield; break;
       case 'bandage': heal(1); break;
@@ -698,7 +724,16 @@ export class Game {
     const sc = alive.map((i) => ({ i, s: Number(scores[i]) || 0, r: this.rng() }));
     sc.sort((x, y) => (x.s - y.s) || (x.r - y.r));
     const losers = sc.slice(0, Math.max(1, Math.floor(alive.length / 2))).map((x) => x.i);
-    this.emit({ t: 'mgResult', game: d.game, player: d.player, scores: sc.map((x) => ({ player: x.i, score: x.s })).reverse(), losers, dmg: MINIGAME_DMG });
+    const ev = { t: 'mgResult', game: d.game, player: d.player, scores: sc.map((x) => ({ player: x.i, score: x.s })).reverse(), losers, dmg: MINIGAME_DMG };
+    // the owner of the Pocket Duo heals if they come first (not on their last life, like every heal)
+    const owner = this.players[d.player];
+    if (sc[sc.length - 1].i === d.player && owner.alive) {
+      const b = owner.hp;
+      if (b > 1) owner.hp = Math.min(owner.maxHp, owner.hp + MINIGAME_HEAL);
+      owner.stats.healed += owner.hp - b;
+      ev.first = { player: d.player, amount: owner.hp - b, hp: owner.hp, lastLife: b <= 1 };
+    }
+    this.emit(ev);
     this.phase = 'turn';
     for (const l of losers) { if (!this.over) this.damage(l, MINIGAME_DMG, null); }
     if (this.over) return;

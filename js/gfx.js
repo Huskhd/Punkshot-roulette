@@ -172,9 +172,13 @@ export const ease = {
   back: (k) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2); },
 };
 const anims = new Set();
-let speed = 1;
+let speed = 1;   // the player's (or online host's) speed setting
+let boost = 1;   // later rounds play faster (set per round by the table view)
+const MAX_SPEED = 3;
 export function setSpeed(s) { speed = s; }
 export function getSpeed() { return speed; }
+export function setSpeedBoost(b) { boost = Math.max(1, b || 1); }
+export function effectiveSpeed() { return Math.min(MAX_SPEED, speed * boost); }
 
 export function animate(dur, fn, e = ease.inOut) {
   return new Promise((res) => {
@@ -185,7 +189,7 @@ export function animate(dur, fn, e = ease.inOut) {
 export const wait = (s) => animate(s, () => {}, ease.linear);
 
 export function tickAnims(dt) {
-  dt *= speed;
+  dt *= effectiveSpeed();
   for (const a of [...anims]) {
     a.t += dt;
     const k = Math.min(1, a.t / a.dur);

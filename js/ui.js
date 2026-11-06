@@ -38,6 +38,19 @@ export class UI {
     el.style.transition = fade ? `opacity ${fade}s` : 'none';
     el.style.opacity = on ? '1' : '0';
   }
+  // partial blackout (0..1), e.g. the drug syringe pulsing you out cold
+  veil(opacity, fade = 0) {
+    const el = $('fx-black');
+    el.style.transition = fade ? `opacity ${fade}s` : 'none';
+    el.style.opacity = String(opacity);
+  }
+  // the world comes back too sharp for a moment
+  contrast(dur = 1.4) {
+    const el = $('gl');
+    el.style.transition = 'none';
+    el.style.filter = 'contrast(1.9) saturate(1.8) brightness(1.15)';
+    requestAnimationFrame(() => requestAnimationFrame(() => { el.style.transition = `filter ${dur}s ease-out`; el.style.filter = ''; }));
+  }
   hurt() {
     const el = $('fx-hurt');
     el.style.transition = 'none';
@@ -83,7 +96,7 @@ export class UI {
       const st = [];
       if (p.doll) st.push(this.img('doll', itemName('doll')));
       if (p.saw) st.push(this.img('saw', itemName('saw')));
-      if (p.insured) st.push(this.img('insurance', itemName('insurance')));
+      if (p.insured) st.push(this.img('insurance', itemName('insurance')) + `<span class="cuff" title="${esc(t('insRounds', { k: p.insured }))}">${p.insured}⟳</span>`);
       if (p.double) st.push(this.img('double', itemName('double')));
       if (p.cuffed) st.push(this.img('cuffs', itemName('cuffs')));
       if (p.hacked || p.jammed) st.push(this.img('hack', itemName('hack')));
